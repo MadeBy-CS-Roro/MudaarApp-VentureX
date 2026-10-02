@@ -342,6 +342,14 @@
       <div class="item-head" style="align-items:end;margin-top:9px"><span class="item-meta">كم ينخصم كل شهر</span><strong class="item-price">${money(plan.amount)}</strong></div>
       ${plan.total ? `<div class="progress-track" aria-label="التقدم ${Math.round(pct)}%"><span style="width:${pct}%"></span></div><div class="item-meta">${format(number(plan.total) - number(plan.remaining))} من ${esc(languageForm("payments", plan.total))}</div>` : ""}
       <div class="item-actions">${actionControl(plan.action)}<span>${plan.confirmed ? `<span class="badge sample">مؤكد</span>` : `<button class="small-action" type="button" data-plan-confirm="${esc(plan.id)}">أكد الخطة</button>`} <button class="small-action" type="button" data-plan-edit="${esc(plan.id)}" data-amount="${esc(plan.amount)}" data-remaining="${esc(plan.remaining ?? "")}">تعديل</button> ${payAll} ${deleteButton}</span></div>
+      <form class="stack-form plan-edit-form" data-plan-id="${esc(plan.id)}" data-amount="${esc(plan.amount)}" data-remaining="${esc(plan.remaining ?? "")}" hidden>
+        <p class="quiet">عدّل المبلغ أو الدفعات الباقية. اترك الحقل فاضي إذا ما تبي تغيّره.</p>
+        <div class="form-row">
+          <label>المبلغ الشهري، ر.س<input name="amount" inputmode="decimal" value="${esc(plan.amount)}" aria-label="المبلغ الشهري لخطة ${esc(plan.name)}"></label>
+          ${plan.remaining != null ? `<label>الدفعات الباقية<input name="remaining" inputmode="numeric" value="${esc(plan.remaining)}" aria-label="الدفعات الباقية لخطة ${esc(plan.name)}"></label>` : ""}
+        </div>
+        <div class="item-actions"><button class="button primary" type="submit">احفظ التعديل</button><button class="button secondary" type="button" data-plan-edit-cancel>إلغاء</button></div>
+      </form>
     </article>`;
   }
   function renderPreviousPayments(items) {
@@ -380,19 +388,16 @@
     }
     if (confirmButton) await confirmPlan(confirmButton.dataset.planConfirm, {}, confirmButton);
     if (editButton) {
-      const amountText = window.prompt("المبلغ الشهري، ر.س", editButton.dataset.amount);
-      if (amountText === null) return;
-      const amount = toNum(amountText);
-      if (!amount || amount > 1000000) return toast("اكتب المبلغ صح.", "error");
-      const remainingText = editButton.dataset.remaining === "" ? null : window.prompt("عدد الدفعات الباقية", editButton.dataset.remaining);
-      if (remainingText === null && editButton.dataset.remaining !== "") return;
-      const body = { amount };
-      if (remainingText !== null) {
-        const remaining = Number(String(remainingText).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)));
-        if (!Number.isInteger(remaining) || remaining < 0 || remaining > 600) return toast("اكتب عدد الدفعات صح.", "error");
-        body.remaining = remaining;
-      }
-      await confirmPlan(editButton.dataset.planEdit, body, editButton);
+      const form = editButton.closest(".item-card").querySelector(".plan-edit-form");
+      form.hidden = false;
+      form.elements.amount.focus();
+    }
+    const cancelButton = event.target.closest("[data-plan-edit-cancel]");
+    if (cancelButton) {
+      const form = cancelButton.closest(".plan-edit-form");
+      form.reset();
+      form.hidden = true;
+      form.closest(".item-card").querySelector("[data-plan-edit]").focus();
     }
     if (deleteButton) {
       if (!window.confirm("تحذف الالتزام اليدوي؟")) return;
@@ -400,6 +405,28 @@
       try { await api(`/api/plans/${encodeURIComponent(deleteButton.dataset.planDelete)}`, { method: "DELETE" }); await loadObligations(); toast("حذفنا الالتزام."); }
       catch (error) { showError(error); deleteButton.disabled = false; }
     }
+  });
+  $("p-obligations").addEventListener("submit", async event => {
+    const form = event.target.closest(".plan-edit-form");
+    if (!form) return;
+    event.preventDefault();
+    if (form.querySelector('[type="submit"]').disabled) return;
+    const body = {};
+    const parse = value => Number(value.replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+    const amountText = form.elements.amount.value.trim();
+    if (amountText) {
+      const amount = parse(amountText);
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) return toast("اكتب المبلغ صح.", "error");
+      if (amount !== Number(form.dataset.amount)) body.amount = amount;
+    }
+    const remainingText = form.elements.remaining?.value.trim() || "";
+    if (remainingText) {
+      const remaining = parse(remainingText);
+      if (!Number.isInteger(remaining) || remaining < 0 || remaining > 600) return toast("اكتب عدد الدفعات صح.", "error");
+      if (remaining !== Number(form.dataset.remaining)) body.remaining = remaining;
+    }
+    if (!Object.keys(body).length) return toast("ما غيّرت شي في الخطة.");
+    await confirmPlan(form.dataset.planId, body, form.querySelector('[type="submit"]'));
   });
   function renderObligationsCached() {
     const data = obligationsCache;

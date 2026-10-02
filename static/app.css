@@ -112,6 +112,7 @@ h2 { margin: 0; font-size: 17px; line-height: 1.4; font-weight: 650; }
 .button.full { width: 100%; }
 .button:disabled { opacity: .52; cursor: not-allowed; }
 .stack-form { display: grid; gap: 11px; }
+.plan-edit-form[hidden] { display: none; }
 .stack-form label { display: grid; gap: 5px; color: #656174; font-size: 12px; font-weight: 550; }
 input, select, textarea { width: 100%; min-height: 46px; border: 1px solid #e5e0eb; border-radius: 13px; padding: 10px 12px; background: #fff; color: var(--ink); outline: none; font-size: 14px; }
 textarea { resize: vertical; min-height: 96px; }

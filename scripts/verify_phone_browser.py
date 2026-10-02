@@ -76,7 +76,7 @@ class Browser:
         Path(path).write_bytes(base64.b64decode(image["data"]))
 
 
-async def verify(debug_url, app_url):
+async def verify(debug_url, app_url, plans_only=False):
     with httpx.Client() as client:
         target = client.put(debug_url + "/json/new?about:blank").json()
     async with websockets.connect(target["webSocketDebuggerUrl"], max_size=10_000_000) as ws:
@@ -103,6 +103,78 @@ async def verify(debug_url, app_url):
         assert (await b.api("/api/summary"))["available"] == 180
         await b.screenshot("/tmp/mawid-phone-home.png")
         print("PASS: onboarding, four confirmations, home numbers, five RTL tabs")
+
+        await b.route("obligations")
+        assert await b.js("[...document.querySelectorAll('.plan-edit-form')].every(form => getComputedStyle(form).display === 'none')")
+        await b.js("""window.planCorrections = [];
+          const originalFetch = window.fetch;
+          window.fetch = function(path, options) {
+            if (String(path).endsWith('/confirm') && options?.method === 'POST')
+              window.planCorrections.push(JSON.parse(options.body));
+            return originalFetch.apply(this, arguments);
+          };""")
+        edit_form = '.plan-edit-form[data-plan-id="tamara"]'
+
+        async def correct_plan(values, expected, amount, remaining):
+            await b.click('[data-plan-edit="tamara"]')
+            assert await b.js(f"getComputedStyle(document.querySelector('{edit_form}')).display !== 'none'")
+            for field, value in values.items():
+                await b.fill(edit_form + f" [name={field}]", value)
+            await b.js(f"document.querySelector('{edit_form}').requestSubmit()")
+            await b.wait(f"!document.querySelector('{edit_form}') || document.querySelector('{edit_form}').hidden")
+            if remaining:
+                assert await b.js(f"getComputedStyle(document.querySelector('{edit_form}')).display === 'none'")
+            assert await b.js("window.planCorrections.at(-1)") == expected
+            saved = next(p for p in (await b.api("/api/plans"))["plans"] if p["id"] == "tamara")
+            assert (saved["amount"], saved["remaining"]) == (amount, remaining)
+            summary = await b.api("/api/summary")
+            if remaining:
+                saved_summary = next(p for p in summary["plans"] if p["id"] == "tamara")
+                assert (saved_summary["amount"], saved_summary["remaining"]) == (amount, remaining)
+            else:
+                assert "tamara" not in {p["id"] for p in summary["plans"]}
+                await b.wait("document.querySelector('#ob-previous-payments').textContent.includes('تمارا')")
+            if remaining:
+                await b.wait(f"document.querySelector('{edit_form}').dataset.amount === '{amount}'")
+                await b.wait(f"document.querySelector('{edit_form}').dataset.remaining === '{remaining}'")
+            await b.wait(f"document.querySelector('#ov-stats').textContent.includes('{summary['obligations_total']:,}')")
+
+        await correct_plan({"amount": "850"}, {"amount": 850}, 850, 2)
+        await correct_plan({"remaining": "3"}, {"remaining": 3}, 850, 3)
+        await correct_plan({"amount": "600", "remaining": "2"}, {"amount": 600, "remaining": 2}, 600, 2)
+        await correct_plan({"amount": "٦٥٠", "remaining": ""}, {"amount": 650}, 650, 2)
+        await correct_plan({"amount": "600"}, {"amount": 600}, 600, 2)
+        await b.click('[data-plan-edit="tamara"]')
+        count = await b.js("window.planCorrections.length")
+        await b.js(f"document.querySelector('{edit_form}').requestSubmit()")
+        assert await b.js("window.planCorrections.length") == count
+        for field, invalid in [("amount", "-5"), ("amount", "Infinity"), ("remaining", "1.5"), ("remaining", "601")]:
+            await b.fill(edit_form + f" [name={field}]", invalid)
+            await b.js(f"document.querySelector('{edit_form}').requestSubmit()")
+            assert await b.js("window.planCorrections.length") == count
+            await b.js(f"document.querySelector('{edit_form}').reset()")
+        await b.fill(edit_form + " [name=amount]", "900")
+        await b.click(edit_form + " [data-plan-edit-cancel]")
+        assert await b.js(f"document.querySelector('{edit_form}').hidden")
+        assert await b.js(f"getComputedStyle(document.querySelector('{edit_form}')).display === 'none'")
+        assert await b.js("window.planCorrections.length") == count
+        await correct_plan({"amount": "", "remaining": "٠"}, {"remaining": 0}, 600, 0)
+        # Restore only the isolated fixture so later incoming pay-all checks
+        # still exercise the original active plan.
+        await b.js("""fetch('/api/plans/tamara/confirm', {
+          method: 'POST', headers: {'Content-Type':'application/json',
+          Authorization:'Bearer '+localStorage.getItem('mawid_token')},
+          body: JSON.stringify({remaining:2})
+        }).then(r => {if (!r.ok) throw new Error('Fixture restore failed');})""")
+        await b.route("overview")
+        await b.route("obligations")
+        print("PASS: partial plan edits omit blank/unchanged values, refresh both views, validate and cancel safely")
+        if plans_only:
+            await b.click('[data-plan-edit="tamara"]')
+            await b.js("document.querySelector('#toasts').replaceChildren()")
+            await b.screenshot("/tmp/mawid-phone-plan-editor.png")
+            assert not b.errors, b.errors
+            return
 
         await b.route("expenses")
         await b.fill("#expense-form [name=name]", "قهوة اختبار")
@@ -313,7 +385,7 @@ def main():
                         break
                     except httpx.HTTPError:
                         time.sleep(.1)
-                asyncio.run(verify("http://127.0.0.1:9223", "http://127.0.0.1:8008/"))
+                asyncio.run(verify("http://127.0.0.1:9223", "http://127.0.0.1:8008/", plans_only="--plans-only" in sys.argv))
             finally:
                 for process in (chrome, server):
                     process.terminate()

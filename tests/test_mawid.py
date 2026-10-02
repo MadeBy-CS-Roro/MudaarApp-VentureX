@@ -115,6 +115,17 @@ def test_confirm_missing_plan_returns_not_found(client):
     assert response.status_code == 404
 
 
+def test_amount_only_correction_preserves_open_ended_plan(client):
+    response = client.post("/api/plans/ejar/confirm", json={"amount": 2200})
+    assert response.status_code == 200
+    plan = next(p for p in client.get("/api/plans").json()["plans"] if p["id"] == "ejar")
+    assert plan["amount"] == 2200
+    assert plan["remaining"] is None
+    summary_plan = next(p for p in client.get("/api/summary").json()["plans"] if p["id"] == "ejar")
+    assert summary_plan["amount"] == 2200
+    assert summary_plan["remaining"] is None
+
+
 def test_summary_numbers(client):
     s = client.get("/api/summary").json()
     assert s["formula"] == {"salary": 8700, "obligations": 4100, "essentials": 3500, "buffer": 500, "total_obligations": 7600}
