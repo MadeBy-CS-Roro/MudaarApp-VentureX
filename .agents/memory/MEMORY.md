@@ -1,3 +1,4 @@
 - [Python merge environment](python-merge-environment.md) — merge hooks do not inherit interactive pip target settings; use project-local packages.
 - [Manual spending boundary](manual-spending-boundary.md) — manual entries must not become evidence for bank-derived income or usual essentials.
 - [Prepayment semantics](prepayment-semantics.md) — pay-all quotes additional money beyond the current reservation, not evidence that the bank already paid.
+- [Archive replacement integrity](archive-replacement-integrity.md) — incomplete ZIP recovery requires approval for a partial replacement, not a silent mix with existing files.
