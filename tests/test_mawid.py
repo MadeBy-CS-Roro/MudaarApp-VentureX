@@ -177,6 +177,25 @@ def test_wishlist_add_read_and_delete(client):
     assert [entry["name"] for entry in client.get("/api/wishlist").json()["items"]] == remaining_names
 
 
+def test_repeated_wishlist_submission_returns_one_saved_item(client):
+    payload = {"name": "سماعة", "price": 800, "method": "cash"}
+
+    first = client.post("/api/wishlist", json=payload)
+    assert first.status_code == 200
+    first_matches = [item for item in first.json()["items"] if item["name"] == payload["name"]]
+    assert len(first_matches) == 1
+
+    second = client.post("/api/wishlist", json=payload)
+    assert second.status_code == 200
+    second_matches = [item for item in second.json()["items"] if item["name"] == payload["name"]]
+    assert second_matches == first_matches
+
+    listed = client.get("/api/wishlist")
+    assert listed.status_code == 200
+    listed_matches = [item for item in listed.json()["items"] if item["name"] == payload["name"]]
+    assert listed_matches == first_matches
+
+
 def test_wishlist_item_cannot_be_deleted_by_another_user(client):
     created = client.post("/api/wishlist", json={"name": "جهاز لوحي", "price": 1800, "method": "fin12"})
     item = next(item for item in created.json()["items"] if item["name"] == "جهاز لوحي")
