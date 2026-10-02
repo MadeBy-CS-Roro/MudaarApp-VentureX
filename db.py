@@ -1,0 +1,101 @@
+"""SQLite schema and small helpers."""
+import json
+import os
+import sqlite3
+from contextlib import contextmanager
+
+DB_PATH = os.getenv("MAWID_DB", "mawid.db")
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY,
+  user_hash TEXT UNIQUE NOT NULL,          -- HMAC of the external id, never the raw id
+  display_name TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS consents (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  bank_id TEXT NOT NULL,
+  scopes TEXT NOT NULL,                    -- JSON list, read-only scopes
+  status TEXT NOT NULL DEFAULT 'active',   -- active | revoked | expired
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS transactions (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  date TEXT NOT NULL,
+  amount REAL NOT NULL,                    -- positive number
+  direction TEXT NOT NULL,                 -- debit | credit
+  merchant TEXT NOT NULL,
+  description TEXT,
+  category TEXT                            -- essential:<name> | flexible:<name> | installment | income | NULL
+);
+CREATE INDEX IF NOT EXISTS ix_tx_user_date ON transactions(user_id, date);
+CREATE TABLE IF NOT EXISTS plans (
+  id TEXT NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  name TEXT NOT NULL,
+  merchant TEXT NOT NULL,
+  kind TEXT NOT NULL,                      -- bnpl | loan | recurring
+  amount REAL NOT NULL,
+  day INTEGER NOT NULL,
+  active_until INTEGER,                    -- last cycle index with a payment, NULL = recurring
+  total_count INTEGER,
+  confirmed INTEGER NOT NULL DEFAULT 0,
+  action TEXT,                             -- JSON {kind,label,url|value}
+  PRIMARY KEY (user_id, id)
+);
+CREATE TABLE IF NOT EXISTS category_overrides (
+  user_id INTEGER NOT NULL, merchant TEXT NOT NULL, category TEXT NOT NULL,
+  PRIMARY KEY (user_id, merchant)
+);
+CREATE TABLE IF NOT EXISTS wishlist (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  name TEXT NOT NULL,
+  price REAL NOT NULL,
+  method TEXT NOT NULL,                    -- cash | bnpl4 | fin12 | save
+  saved REAL NOT NULL DEFAULT 0,
+  notified INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS demo_state (
+  user_id INTEGER PRIMARY KEY, today TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY,
+  ts TEXT DEFAULT CURRENT_TIMESTAMP,
+  user_hash TEXT,
+  action TEXT NOT NULL,
+  detail TEXT                              -- JSON, never raw transactions
+);
+"""
+
+
+def connect() -> sqlite3.Connection:
+    con = sqlite3.connect(DB_PATH, check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA foreign_keys = ON")
+    return con
+
+
+@contextmanager
+def tx():
+    con = connect()
+    try:
+        yield con
+        con.commit()
+    finally:
+        con.close()
+
+
+def init():
+    with tx() as con:
+        con.executescript(SCHEMA)
+
+
+def audit(con, user_hash: str, action: str, detail: dict | None = None):
+    con.execute("INSERT INTO audit_log(user_hash, action, detail) VALUES (?,?,?)",
+                (user_hash, action, json.dumps(detail or {}, ensure_ascii=False)))
