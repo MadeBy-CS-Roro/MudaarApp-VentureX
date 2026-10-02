@@ -7,6 +7,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,8 +21,44 @@ import detect
 import security
 import service
 
-DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"   # no token needed for the stage demo
+PRODUCTION_MODE = security.PRODUCTION_MODE
+DEMO_MODE = not PRODUCTION_MODE
 DEMO_USER = "demo-noura"
+
+
+def _allowed_origins() -> list[str]:
+    if not PRODUCTION_MODE:
+        return ["*"]
+
+    configured = os.getenv("ALLOWED_ORIGINS", "")
+    if not configured.strip():
+        raise RuntimeError("ALLOWED_ORIGINS is required in production.")
+
+    origins = []
+    for item in configured.split(","):
+        origin = item.strip().rstrip("/")
+        parsed = urlsplit(origin)
+        try:
+            parsed.port
+        except ValueError as exc:
+            raise RuntimeError("ALLOWED_ORIGINS must contain valid HTTPS origins.") from exc
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or "*" in parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RuntimeError("ALLOWED_ORIGINS must contain exact HTTPS origins without paths or wildcards.")
+        origins.append(f"https://{parsed.netloc.lower()}")
+
+    if not origins:
+        raise RuntimeError("ALLOWED_ORIGINS must contain at least one origin.")
+    return list(dict.fromkeys(origins))
+
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -29,7 +66,12 @@ async def lifespan(_app):
     yield
 
 app = FastAPI(title="Mawid API", version="0.1", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins(),
+    allow_methods=["GET", "POST", "DELETE"] if PRODUCTION_MODE else ["*"],
+    allow_headers=["Authorization", "Content-Type"] if PRODUCTION_MODE else ["*"],
+)
 limiter = security.RateLimiter(limit=int(os.getenv("RATE_LIMIT", "120")), window=60)
 
 
@@ -64,9 +106,11 @@ def current_user(request: Request, authorization: Optional[str] = Header(default
         raise HTTPException(429, "طلبات كثيرة، جرب بعد دقيقة.")
     user_hash = None
     if authorization and authorization.startswith("Bearer "):
-        body = security.verify_token(authorization[7:])
-        if not body:
+        body = security.verify_token(authorization[7:].strip())
+        if not body or not isinstance(body.get("sub"), str) or not body["sub"]:
             raise HTTPException(401, "الجلسة انتهت، اربط حسابك من جديد.")
+        if PRODUCTION_MODE and body.get("mode") != "production":
+            raise HTTPException(401, "لازم تسجل دخول.")
         user_hash = body["sub"]
     elif DEMO_MODE:
         user_hash = security.hash_id(DEMO_USER)
@@ -87,6 +131,8 @@ def health():
 
 @app.post("/api/consent")
 def consent(body: ConsentIn, request: Request):
+    if not DEMO_MODE:
+        raise HTTPException(404, "المسار غير متاح.")
     if not limiter.allow(request.client.host if request.client else "anon"):
         raise HTTPException(429, "طلبات كثيرة، جرب بعد دقيقة.")
     user_hash = security.hash_id(DEMO_USER)   # production: hash of the bank's customer id
@@ -94,7 +140,11 @@ def consent(body: ConsentIn, request: Request):
         r = service.connect_bank(con, user_hash, body.bank_id)
         db.audit(con, user_hash, "consent.granted", {"bank": body.bank_id, "consent_id": r["consent_id"],
                                                      "plans_found": len(r["plans"])})
-    token = security.sign_token({"sub": user_hash, "cid": r["consent_id"]})
+    token = security.sign_token({
+        "sub": user_hash,
+        "cid": r["consent_id"],
+        "mode": "demo" if DEMO_MODE else "production",
+    })
     return {"consent_id": r["consent_id"], "token": token, "expires_at": r["expires_at"],
             "plans_found": len(r["plans"]), "unknown_merchants": r["unknown_merchants"]}
 
@@ -174,6 +224,8 @@ def post_chat(body: ChatIn, user=Depends(current_user)):
 
 @app.post("/api/demo/next-month")
 def demo_next_month(user=Depends(current_user)):
+    if not DEMO_MODE:
+        raise HTTPException(404, "المسار غير متاح.")
     with db.tx() as con:
         r = service.next_month(con, user["id"])
         db.audit(con, user["hash"], "demo.next_month", {"events": len(r["events"])})
@@ -182,6 +234,8 @@ def demo_next_month(user=Depends(current_user)):
 
 @app.post("/api/demo/reset")
 def demo_reset(request: Request):
+    if not DEMO_MODE:
+        raise HTTPException(404, "المسار غير متاح.")
     return consent(ConsentIn(bank_id="demo1"), request)
 
 

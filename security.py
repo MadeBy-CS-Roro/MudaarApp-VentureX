@@ -10,16 +10,50 @@ import warnings
 from collections import defaultdict, deque
 
 
+def _production_mode() -> bool:
+    """Resolve the mode while preserving DEMO_MODE for existing demo setups."""
+    mode = os.getenv("MAWID_ENV")
+    demo_mode = os.getenv("DEMO_MODE")
+
+    if demo_mode is not None and demo_mode.strip().lower() not in {"true", "false"}:
+        raise RuntimeError("DEMO_MODE must be either 'true' or 'false'.")
+
+    if mode is not None:
+        mode = mode.strip().lower()
+        if mode not in {"demo", "production"}:
+            raise RuntimeError("MAWID_ENV must be either 'demo' or 'production'.")
+        is_production = mode == "production"
+        if demo_mode is not None and (demo_mode.strip().lower() == "true") == is_production:
+            raise RuntimeError("MAWID_ENV and DEMO_MODE specify conflicting modes.")
+        return is_production
+
+    # Existing deployments that set DEMO_MODE=false are treated as production.
+    return demo_mode is not None and demo_mode.strip().lower() == "false"
+
+
+PRODUCTION_MODE = _production_mode()
+
+
 def _secret(name: str) -> bytes:
-    v = os.getenv(name)
-    if not v:
+    value = os.getenv(name, "").strip()
+    if PRODUCTION_MODE:
+        if not value:
+            raise RuntimeError(f"{name} is required when Mawid runs in production.")
+        if len(value) < 32 or value.startswith("dev-only-"):
+            raise RuntimeError(f"{name} must be a unique random value of at least 32 characters in production.")
+        return value.encode()
+
+    if not value:
         warnings.warn(f"{name} is not set; using an insecure dev value. Set it in Replit Secrets.")
-        v = f"dev-only-{name}"
-    return v.encode()
+        value = f"dev-only-{name}"
+    return value.encode()
 
 
 HMAC_KEY = _secret("HMAC_KEY")             # hashing user identifiers
 SIGNING_SECRET = _secret("SIGNING_SECRET") # signing session tokens
+
+if PRODUCTION_MODE and HMAC_KEY == SIGNING_SECRET:
+    raise RuntimeError("HMAC_KEY and SIGNING_SECRET must be different in production.")
 
 
 def hash_id(raw: str) -> str:

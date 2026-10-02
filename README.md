@@ -39,7 +39,13 @@ FastAPI + SQLite. The engine does all the math. The assistant only explains tool
 | POST | `/api/demo/reset` | | same as consent |
 
 `tightK`, `earliest`, `buyK`: months from now (0 = this month, 1 = next month).
-Auth: send `Authorization: Bearer <token>` from `/api/consent`. With `DEMO_MODE=true` (default) the token is optional.
+Demo auth: send `Authorization: Bearer <token>` from `/api/consent`; with demo mode enabled (default), the token is optional.
+
+## Production safeguards
+
+Set `MAWID_ENV=production` (or `DEMO_MODE=false`) to enable production safeguards. Configure distinct random `HMAC_KEY` and `SIGNING_SECRET` values with at least 32 characters each, and set `ALLOWED_ORIGINS` to comma-separated exact HTTPS origins (no paths or wildcards). The service refuses to start if production configuration is missing or invalid.
+
+All protected production routes require a signed bearer token with `mode=production` and a `sub` matching a provisioned user's HMAC. `/api/consent`, `/api/demo/reset`, and `/api/demo/next-month` are demo-only and return 404 in production. Production identity/token issuance and bank enrollment are not included; set up an approved identity and banking flow before onboarding real users. No real bank connection or storage migration is part of this backend.
 
 ## Demo numbers (tested)
 Safe to spend 600 = 8,700 − 4,100 − 3,500 − 500. Spent 420, available 180.

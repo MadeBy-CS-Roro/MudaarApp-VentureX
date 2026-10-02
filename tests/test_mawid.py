@@ -1,6 +1,8 @@
 """Run: pytest -q   (uses a temporary database)"""
 import os
 import sys
+import json
+import subprocess
 
 import pytest
 
@@ -77,6 +79,95 @@ def test_next_month_notifies(client):
 def test_bad_input_rejected(client):
     assert client.post("/api/scenarios", json={"price": -5}).status_code == 422
     assert client.get("/api/summary", headers={"Authorization": "Bearer forged.token"}).status_code == 401
+
+
+def test_demo_reset_still_works(client):
+    response = client.post("/api/demo/reset")
+    assert response.status_code == 200
+    assert response.json()["plans_found"] == 4
+
+
+def test_production_requires_auth_and_disables_demo_routes(client, monkeypatch):
+    monkeypatch.setattr(main, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(main, "DEMO_MODE", False)
+
+    assert client.get("/api/summary").status_code == 401
+    assert client.post("/api/consent", json={"bank_id": "demo1"}).status_code == 404
+    assert client.post("/api/demo/reset").status_code == 404
+
+    user_hash = main.security.hash_id("production-test-user")
+    with main.db.tx() as con:
+        con.execute("INSERT INTO users(user_hash, display_name) VALUES (?, ?)", (user_hash, "test"))
+    token = main.security.sign_token({"sub": user_hash, "mode": "production"})
+    headers = {"Authorization": f"Bearer {token}"}
+
+    assert client.get("/api/wishlist", headers=headers).status_code == 200
+    assert client.post("/api/demo/next-month", headers=headers).status_code == 404
+
+
+def _production_import(extra_env=None, code="import main"):
+    env = os.environ.copy()
+    for name in ("MAWID_ENV", "DEMO_MODE", "HMAC_KEY", "SIGNING_SECRET", "ALLOWED_ORIGINS"):
+        env.pop(name, None)
+    env.update({"MAWID_ENV": "production"})
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=os.path.dirname(os.path.dirname(__file__)),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_production_requires_configured_secrets():
+    result = _production_import({"SIGNING_SECRET": "s" * 40})
+    assert result.returncode != 0
+    assert "HMAC_KEY is required" in result.stderr
+
+
+def test_production_rejects_reused_secrets():
+    secret = "s" * 40
+    result = _production_import({
+        "HMAC_KEY": secret,
+        "SIGNING_SECRET": secret,
+        "ALLOWED_ORIGINS": "https://mawid.example",
+    })
+    assert result.returncode != 0
+    assert "must be different" in result.stderr
+
+
+def test_production_requires_exact_https_cors_origins():
+    secret_one, secret_two = "h" * 40, "s" * 40
+    missing = _production_import({
+        "HMAC_KEY": secret_one,
+        "SIGNING_SECRET": secret_two,
+    })
+    assert missing.returncode != 0
+    assert "ALLOWED_ORIGINS is required" in missing.stderr
+
+    configured = _production_import(
+        {
+            "HMAC_KEY": secret_one,
+            "SIGNING_SECRET": secret_two,
+            "ALLOWED_ORIGINS": "https://app.mawid.example, https://admin.mawid.example/",
+        },
+        code="import main, json; print(json.dumps(main.app.user_middleware[0].kwargs['allow_origins']))",
+    )
+    assert configured.returncode == 0, configured.stderr
+    assert json.loads(configured.stdout.strip()) == [
+        "https://app.mawid.example",
+        "https://admin.mawid.example",
+    ]
+
+    wildcard = _production_import({
+        "HMAC_KEY": secret_one,
+        "SIGNING_SECRET": secret_two,
+        "ALLOWED_ORIGINS": "https://app.mawid.example, *",
+    })
+    assert wildcard.returncode != 0
+    assert "exact HTTPS origins" in wildcard.stderr
 
 
 def test_root_redirects_to_docs(client):
