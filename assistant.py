@@ -17,6 +17,8 @@ import httpx
 
 import engine as E
 import service
+import actions
+import language
 
 MODEL = os.getenv("MAWID_LLM_MODEL", "claude-haiku-4-5-20251001")
 API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -29,6 +31,14 @@ SYSTEM = """أنت "مساعد موعد"، مساعد مالي شخصي لمست
 - tightK و whenK أرقام شهور نسبية: 0 = هالشهر، 1 = الشهر الجاي، وهكذا.
 - tight = اللي يبقى في أضيق شهر بعد الشراء. إذا سالب يعني ما يكفي.
 - خلك مختصر: جملتين إلى ثلاث."""
+SYSTEM += """
+- رد بلهجة سعودية بيضاء بسيطة ومتسقة. لا تستخدم فصحى رسمية.
+- طابق العدد مع المعدود صح: دفعة وحدة، دفعتين، 3 دفعات، 17 دفعة؛ يوم واحد، يومين، 3 أيام، 30 يوم.
+- خاطب المستخدم بالمفرد المذكر. استخدم هالشهر، الشهر الجاي، الحين، شهور، ر.س.
+- قبل أي تعديل، اعرض الملخص وانتظر التأكيد. أدوات الكتابة تنشئ طلب تأكيد فقط، مو تعديل فعلي.
+- لا تقول إنك أضفت أو حذفت شي قبل ما المستخدم يأكد الطلب.
+- عروض الجهات تجريبية للتوضيح، مو عروض حقيقية. لا توصي بجهة؛ قل الأوفر لك حسب الحسابات.
+- تجمع أول: مبلغ التوفير ما يتعدى 10% من الراتب أو المتاح؛ استخدم نتيجة الأداة بدون حساب من عندك."""
 
 TOOLS = [
     {"name": "get_month_summary", "description": "Salary day, total obligations this month, safe-to-spend, spent so far, available now, alerts.",
@@ -47,22 +57,33 @@ TOOLS = [
     {"name": "get_seasonal_forecast", "description": "Extra spending in seasons (Ramadan, Eid, back to school, summer) based on last year.",
      "input_schema": {"type": "object", "properties": {}}},
 ]
+TOOLS = [tool for tool in TOOLS if tool["name"] != "add_to_wishlist"]
+TOOLS.append({"name": "compare_offers", "description": "Sample provider offers, best offer by affordability then cost, and the capped save-first month-by-month plan.",
+              "input_schema": {"type": "object", "properties": {"price": {"type": "number", "minimum": 1}}, "required": ["price"]}})
+for _name, _model in actions.WRITE_MODELS.items():
+    TOOLS.append({"name": _name, "description": f"Propose {_name}. DOES NOT WRITE financial data. Returns a pending confirmation card; user must confirm separately.",
+                  "input_schema": _model.model_json_schema()})
 
 
 def run_tool(con, user_id: int, name: str, args: dict) -> dict:
+    if name in actions.WRITE_MODELS:
+        try:
+            return {"action": actions.propose(con, user_id, name, args)}
+        except ValueError as exc:
+            return {"error": str(exc)}
     if name == "get_month_summary":
         s = service.summary(con, user_id)
         return {k: s[k] for k in ("salary", "obligations_total", "safe_to_spend", "spent", "available", "alerts")}
     if name == "list_plans":
-        return {"plans": [{k: p[k] for k in ("name", "amount", "day", "remaining", "total")} for p in service.plans_view(con, user_id)]}
+        return {"plans": [{k: p[k] for k in ("id", "name", "amount", "day", "remaining", "total")} for p in service.plans_view(con, user_id)]}
     if name == "get_spending":
         return service.summary(con, user_id)["categories"]
     if name == "compare_scenarios":
         return service.scenarios(con, user_id, float(args["price"]))
-    if name == "add_to_wishlist":
-        return service.add_wish(con, user_id, args["name"], float(args["price"]), args["method"])
+    if name == "compare_offers":
+        return service.offer_comparison(con, user_id, float(args["price"]))
     if name == "check_wishlist":
-        return {"items": [{"name": w["name"], "price": w["price"], "method": w["method"], "saved": w["saved"],
+        return {"items": [{"id": w["id"], "name": w["name"], "price": w["price"], "method": w["method"], "saved": w["saved"],
                            "ok": w["status"]["ok"], "whenK": w["status"]["whenK"]} for w in service.wishlist(con, user_id)]}
     if name == "get_seasonal_forecast":
         return {"available": False, "reason": "نحتاج سنة كاملة من العمليات عشان نقارن المواسم. الديمو فيه 4 شهور بس."}
@@ -77,16 +98,21 @@ _last: dict[int, dict] = defaultdict(lambda: {"price": 3000.0, "method": "bnpl4"
 def chat(con, user_id: int, message: str) -> dict:
     if API_KEY:
         try:
-            return _chat_llm(con, user_id, message)
+            result = _chat_llm(con, user_id, message)
+            result["mode"] = "llm"
+            return result
         except Exception as e:   # network/LLM failure -> never break the demo
             print("LLM failed, falling back:", e)
-    return _chat_rules(con, user_id, message)
+    result = _chat_rules(con, user_id, message)
+    result["mode"] = "rules"
+    result.setdefault("actions", [])
+    return result
 
 
 def _chat_llm(con, user_id: int, message: str) -> dict:
     hist = _history[user_id]
     messages = list(hist) + [{"role": "user", "content": message}]
-    used = []
+    used, proposals = [], []
     for _ in range(5):
         r = httpx.post("https://api.anthropic.com/v1/messages", timeout=30, headers={
             "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
@@ -99,20 +125,22 @@ def _chat_llm(con, user_id: int, message: str) -> dict:
             reply = "".join(b.get("text", "") for b in data["content"] if b["type"] == "text").strip()
             hist.append({"role": "user", "content": message})
             hist.append({"role": "assistant", "content": reply})
-            return {"reply": reply, "tools": used}
+            return {"reply": reply, "tools": used, "actions": proposals}
         results = []
         for c in calls:
             used.append(c["name"])
             out = run_tool(con, user_id, c["name"], c["input"])
+            if "action" in out:
+                proposals.append(out["action"])
             results.append({"type": "tool_result", "tool_use_id": c["id"], "content": json.dumps(out, ensure_ascii=False)})
         messages.append({"role": "user", "content": results})
-    return {"reply": "ما قدرت أكمل الحساب، جرب تسأل بطريقة ثانية.", "tools": used}
+    return {"reply": "ما قدرت أكمل الحساب، جرّب تسأل بطريقة ثانية.", "tools": used, "actions": proposals}
 
 
 # ---------- fallback: rules + the same tools ----------
 def _num(text: str) -> list[float]:
     text = text.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
-    return [float(x.replace(",", "")) for x in re.findall(r"\d[\d,]*", text)]
+    return [float(x.replace(",", "")) for x in re.findall(r"\d+(?:,\d{3})*(?:\.\d+)?", text)]
 
 
 def _f(n: float) -> str:
@@ -122,12 +150,32 @@ def _f(n: float) -> str:
 def _chat_rules(con, user_id: int, m: str) -> dict:
     ctx = _last[user_id]
     price = next((n for n in _num(m) if n >= 100), ctx["price"])
-    method = "fin12" if re.search(r"12|تمويل", m) else "cash" if re.search(r"كاش|نقد", m) else ctx["method"]
+    method = "save" if re.search(r"تجمع|أجمع|اجمع|تحوش|تحوّش|ادخ|أدخ", m) else "fin12" if re.search(r"12|تمويل", m) else "cash" if re.search(r"كاش|نقد", m) else "bnpl4" if re.search(r"4.*دفع|٤.*دفع", m) else ctx["method"]
     ctx.update(price=price, method=method)
 
+    if re.search(r"(ضيف|أضف|اضف|سجل|سجّل).*مصروف", m):
+        nums = _num(m)
+        if not nums:
+            return {"reply": "كم مبلغ المصروف؟ اكتب مثلاً: ضيف مصروف قهوة 20.", "tools": []}
+        name = re.split(r"مصروف\s*", m, maxsplit=1)[-1]
+        name = re.sub(r"[\d٠-٩,\.]+.*$", "", name).strip() or "مصروف"
+        category = "flexible:قهوة" if "قهوة" in name else "flexible:غير مصنف"
+        out = run_tool(con, user_id, "add_expense", {"name": name, "amount": nums[-1], "category": category})
+        return _proposal_reply(out, "add_expense")
+
     if re.search(r"حط|أمني|امني|ذكرني", m):
-        run_tool(con, user_id, "add_to_wishlist", {"name": ctx["name"], "price": price, "method": method})
-        return {"reply": "تم. بذكرك أول ما يصير مناسب 👍", "tools": ["add_to_wishlist"]}
+        name_match = re.search(r"(?:حط|ضيف|أضف)\s+(.+?)(?:\s+ب|بال|في)?(?:الأمنيات|الامنيات|أمنيات|امنيات)", m)
+        name = name_match.group(1).strip() if name_match else ctx["name"]
+        if "جوال" in m:
+            name = "جوال"
+        ctx["name"] = name
+        out = run_tool(con, user_id, "add_to_wishlist", {"name": name, "price": price, "method": method})
+        return _proposal_reply(out, "add_to_wishlist")
+
+    if method == "save" and re.search(r"تجمع|أجمع|اجمع|تحوش|تحوّش|ادخ|أدخ|متى", m):
+        saving = run_tool(con, user_id, "compare_offers", {"price": price})["save"]
+        return {"reply": f"تقدر تحوّش { _f(saving['monthly'])} ر.س هالشهر، وما نتعدى 10% من راتبك بأي شهر. توصل للمبلغ {saving['buy_label']}.",
+                "tools": ["compare_offers"]}
 
     if re.search(r"متى|امتى", m):
         r = run_tool(con, user_id, "compare_scenarios", {"price": price})
@@ -136,13 +184,13 @@ def _chat_rules(con, user_id: int, m: str) -> dict:
             return {"reply": f"بهالطريقة ما يناسب قريب. لو تجمع أول، توصل لـ {_f(price)} {E.month_label(r['save']['buyK'])}.", "tools": ["compare_scenarios"]}
         snap = service.snapshot(con, user_id)
         tight = E.evaluate(snap, method, price, e)["tight"]
-        return {"reply": f"{E.month_label(e)}. وقتها يبقى لك {_f(tight)} بأضيق شهر.", "tools": ["compare_scenarios"]}
+        return {"reply": f"{E.month_label(e)}. وقتها يبقى لك {_f(tight)} ر.س في أضيق شهر.", "tools": ["compare_scenarios"]}
 
     if re.search(r"كم.*(علي|التزام|اقساط|أقساط)|وش علي", m):
         s = run_tool(con, user_id, "get_month_summary", {})
         pl = run_tool(con, user_id, "list_plans", {})["plans"]
         names = "، ".join(f"{p['name']} {_f(p['amount'])}" for p in pl if p["remaining"] != 0)
-        return {"reply": f"هالشهر عليك {_f(s['obligations_total'])} ريال: {names}. وتقدر تصرف {_f(s['available'])} بعد الأساسيات.",
+        return {"reply": f"التزاماتك هالشهر مع المعيشة {_f(s['obligations_total'])} ر.س. الأقساط والإيجار: {names}. وتقدر تصرف {_f(s['available'])} ر.س الحين.",
                 "tools": ["get_month_summary", "list_plans"]}
 
     if re.search(r"صرف|مصاريف", m):
@@ -150,19 +198,25 @@ def _chat_rules(con, user_id: int, m: str) -> dict:
         if not c:
             return {"reply": "ما صرفت شي من المصاريف المرنة هالشهر للحين.", "tools": ["get_spending"]}
         parts = "، ".join(f"{k} {_f(v)}" for k, v in c.items())
-        return {"reply": f"صرفت {_f(sum(c.values()))} هالشهر: {parts}.", "tools": ["get_spending"]}
+        return {"reply": f"صرفت {_f(sum(c.values()))} ر.س هالشهر: {parts}.", "tools": ["get_spending"]}
 
     if re.search(r"أقدر|اقدر|آخذ|اخذ|اشتري|أشتري|جوال", m):
         r = run_tool(con, user_id, "compare_scenarios", {"price": price})[method]
         lead = {"bnpl4": f"كل دفعة {_f(r['monthly'])}", "fin12": f"القسط {_f(r['monthly'])} والتكلفة الكلية {_f(r['total'])}",
                 "cash": f"المبلغ كامل {_f(price)}"}[method]
         if r["ok"]:
-            return {"reply": f"{lead}. بعد أقساطك ومصاريفك المعتادة يبقى لك {_f(r['tight'])} بأضيق شهر. مناسب.", "tools": ["compare_scenarios"]}
+            return {"reply": f"{lead}. بعد أقساطك ومصاريفك المعتادة يبقى لك {_f(r['tight'])} ر.س في أضيق شهر. مناسب.", "tools": ["compare_scenarios"]}
         later = ""
         if r["earliest"] is not None:
             snap = service.snapshot(con, user_id)
-            later = f" لو تبدأ {E.month_label(r['earliest'])}، يبقى لك {_f(E.evaluate(snap, method, price, r['earliest'])['tight'])} بأضيق شهر."
-        return {"reply": f"{lead}. {E.month_label(r['tightK'])} تصير ناقص {_f(-r['tight'])} بعد أقساطك ومصاريفك. الوضع ما يسمح الحين.{later}",
+            later = f" لو تبدأ {E.month_label(r['earliest'])}، يبقى لك {_f(E.evaluate(snap, method, price, r['earliest'])['tight'])} ر.س في أضيق شهر."
+        return {"reply": f"{lead}. {E.month_label(r['tightK'])} تصير ناقص {_f(-r['tight'])} ر.س بعد أقساطك ومصاريفك. ما يكفيك الحين.{later}",
                 "tools": ["compare_scenarios"]}
 
     return {"reply": "أقدر أجاوبك عن أقساطك، مصاريفك، أو شي تبي تشتريه. جرب: «أقدر آخذ جوال بـ 3000 على 4 دفعات؟»", "tools": []}
+
+
+def _proposal_reply(out: dict, tool: str) -> dict:
+    action = out.get("action")
+    return {"reply": "راجع الطلب وأكّد إذا يناسبك. ما تغيّر شي للحين." if action else out["error"],
+            "tools": [tool], "actions": [action] if action else []}

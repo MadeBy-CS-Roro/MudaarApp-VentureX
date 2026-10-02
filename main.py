@@ -20,6 +20,9 @@ import db
 import detect
 import security
 import service
+import actions
+import inputs
+import language
 
 PRODUCTION_MODE = security.PRODUCTION_MODE
 DEMO_MODE = not PRODUCTION_MODE
@@ -86,14 +89,11 @@ class ConfirmIn(BaseModel):
 class PriceIn(BaseModel):
     price: float = Field(gt=0, le=1_000_000)
 
-class WishIn(BaseModel):
-    name: str = Field(min_length=1, max_length=60)
-    price: float = Field(gt=0, le=1_000_000)
-    method: Literal["cash", "bnpl4", "fin12", "save"]
+WishIn = inputs.WishIn
 
 class WishUpdate(BaseModel):
     price: Optional[float] = Field(default=None, gt=0, le=1_000_000)
-    method: Optional[Literal["cash", "bnpl4", "fin12", "save"]] = None
+    method: Optional[Literal["cash", "bnpl3", "bnpl4", "bnpl6", "fin12", "save"]] = None
 
 class CategoryIn(BaseModel):
     merchant: str = Field(min_length=1, max_length=80)
@@ -101,6 +101,11 @@ class CategoryIn(BaseModel):
 
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=500)
+
+ExpenseIn = inputs.ExpenseIn
+PlanIn = inputs.PlanIn
+ContactIn = inputs.ContactIn
+contact_limiter = security.RateLimiter(limit=5, window=60)
 
 
 # ---------- auth + rate limit ----------
@@ -123,7 +128,7 @@ def current_user(request: Request, authorization: Optional[str] = Header(default
     with db.tx() as con:
         row = con.execute("SELECT id FROM users WHERE user_hash=?", (user_hash,)).fetchone()
     if not row:
-        raise HTTPException(404, "ما فيه حساب مربوط. ابدأ من POST /api/consent.")
+        raise HTTPException(404, "اربط حسابك البنكي أول.")
     return {"id": row["id"], "hash": user_hash}
 
 
@@ -131,6 +136,11 @@ def current_user(request: Request, authorization: Optional[str] = Header(default
 @app.get("/api/health")
 def health():
     return {"ok": True, "llm": bool(assistant.API_KEY), "demo_mode": DEMO_MODE}
+
+
+@app.get("/api/language")
+def get_language():
+    return language.FORMS
 
 
 @app.post("/api/consent")
@@ -149,6 +159,8 @@ def consent(body: ConsentIn, request: Request):
         "cid": r["consent_id"],
         "mode": "demo" if DEMO_MODE else "production",
     })
+    assistant._history.pop(r["user_id"], None)
+    assistant._last.pop(r["user_id"], None)
     return {"consent_id": r["consent_id"], "token": token, "expires_at": r["expires_at"],
             "plans_found": len(r["plans"]), "unknown_merchants": r["unknown_merchants"]}
 
@@ -158,6 +170,8 @@ def revoke(user=Depends(current_user)):
     with db.tx() as con:
         service.revoke(con, user["id"])
         db.audit(con, user["hash"], "consent.revoked")
+    assistant._history.pop(user["id"], None)
+    assistant._last.pop(user["id"], None)
     return {"ok": True}
 
 
@@ -220,7 +234,7 @@ def patch_wishlist(item_id: int, body: WishUpdate, user=Depends(current_user)):
 @app.delete("/api/wishlist/{item_id}")
 def delete_wish(item_id: int, user=Depends(current_user)):
     with db.tx() as con:
-        con.execute("DELETE FROM wishlist WHERE id=? AND user_id=?", (item_id, user["id"]))
+        actions.remove_wish(con, user["id"], item_id)
         return {"items": service.wishlist(con, user["id"])}
 
 
@@ -228,17 +242,100 @@ def delete_wish(item_id: int, user=Depends(current_user)):
 def set_category(body: CategoryIn, user=Depends(current_user)):
     """User fixes a category once; we remember it for that merchant."""
     with db.tx() as con:
-        con.execute("INSERT OR REPLACE INTO category_overrides VALUES (?,?,?)", (user["id"], body.merchant, body.category))
-        con.execute("UPDATE transactions SET category=? WHERE user_id=? AND merchant=?", (body.category, user["id"], body.merchant))
+        service.set_category(con, user["id"], body.merchant, body.category)
+        db.audit(con, user["hash"], "category.updated")
         return {"ok": True}
+
+
+@app.get("/api/expenses")
+def get_expenses(user=Depends(current_user)):
+    with db.tx() as con:
+        return service.expenses(con, user["id"])
+
+
+@app.post("/api/expenses")
+def post_expense(body: ExpenseIn, user=Depends(current_user)):
+    with db.tx() as con:
+        service.add_expense(con, user["id"], **body.model_dump())
+        db.audit(con, user["hash"], "expense.added")
+        return service.expenses(con, user["id"])
+
+
+@app.delete("/api/expenses/{tx_id}")
+def delete_expense(tx_id: int, user=Depends(current_user)):
+    with db.tx() as con:
+        if not service.delete_expense(con, user["id"], tx_id):
+            raise HTTPException(404, "المصروف مو موجود أو جاي من البنك.")
+        db.audit(con, user["hash"], "expense.deleted")
+        return service.expenses(con, user["id"])
+
+
+@app.get("/api/obligations")
+def get_obligations(user=Depends(current_user)):
+    with db.tx() as con:
+        return service.obligations_view(con, user["id"])
+
+
+@app.post("/api/plans")
+def post_plan(body: PlanIn, user=Depends(current_user)):
+    with db.tx() as con:
+        pid = service.add_plan(con, user["id"], **body.model_dump())
+        db.audit(con, user["hash"], "plan.added", {"plan": pid})
+        return {"id": pid, "plans": service.plans_view(con, user["id"])}
+
+
+@app.delete("/api/plans/{plan_id}")
+def delete_plan(plan_id: str, user=Depends(current_user)):
+    with db.tx() as con:
+        if not service.delete_plan(con, user["id"], plan_id):
+            raise HTTPException(404, "الالتزام مو موجود.")
+        db.audit(con, user["hash"], "plan.deleted", {"plan": plan_id})
+        return {"plans": service.plans_view(con, user["id"])}
+
+
+@app.post("/api/offers")
+def post_offers(body: PriceIn, user=Depends(current_user)):
+    with db.tx() as con:
+        return service.offer_comparison(con, user["id"], body.price)
+
+
+@app.get("/api/account")
+def get_account(user=Depends(current_user)):
+    with db.tx() as con:
+        return service.account(con, user["id"], DEMO_MODE)
+
+
+@app.post("/api/contact")
+def post_contact(body: ContactIn, request: Request):
+    if not contact_limiter.allow(request.client.host if request.client else "anon"):
+        raise HTTPException(429, "طلبات كثيرة، جرّب بعد دقيقة.")
+    with db.tx() as con:
+        con.execute("INSERT INTO contacts(name,message) VALUES (?,?)", (body.name, body.message))
+    return {"ok": True}
 
 
 @app.post("/api/chat")
 def post_chat(body: ChatIn, user=Depends(current_user)):
+    # Commit the atomic quota claim before waiting for an external LLM.
+    with db.tx() as con:
+        if not service.consume_chat_question(con, user["id"]):
+            raise HTTPException(429, "خلصت أسئلتك المجانية هالشهر. تتجدد الشهر الجاي، وباقي مزايا موعد متاحة لك.")
     with db.tx() as con:
         r = assistant.chat(con, user["id"], body.message)
         db.audit(con, user["hash"], "chat", {"tools": r["tools"]})   # log tools used, not the message
         return r
+
+
+@app.post("/api/chat/actions/{action_id}/confirm")
+def confirm_chat_action(action_id: str, user=Depends(current_user)):
+    with db.tx() as con:
+        return actions.resolve(con, user, action_id, True)
+
+
+@app.post("/api/chat/actions/{action_id}/cancel")
+def cancel_chat_action(action_id: str, user=Depends(current_user)):
+    with db.tx() as con:
+        return actions.resolve(con, user, action_id, False)
 
 
 @app.post("/api/demo/next-month")

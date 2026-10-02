@@ -10,6 +10,7 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 - Interactive API docs: `/docs`; health check: `/api/health`.
 - Dependencies are listed in `requirements.txt`.
 - Tests: `python -m pytest -q`. Tests use a separate temporary SQLite database.
+- Optional interactive phone checks: `python scripts/verify_phone_browser.py` uses existing Chromium and a temporary test database; it never resets the running app's data.
 - Post-merge setup: `scripts/post-merge.sh` installs dependencies and runs tests non-interactively; Replit then reconciles workflows. It does not reset or migrate the runtime database.
 
 ## Publishing
@@ -34,7 +35,10 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 Open the preview and use the demo bank onboarding when prompted. You can also call `POST /api/consent` with `{"bank_id":"demo1"}` to initialize demo data, then try `/api/summary`, `/api/plans`, `/api/scenarios`, and `/api/chat` in the docs.
 Consent creation and `/api/demo/reset` reset the demo data. No live bank connection is configured.
 
-## Frontend scope
+## Phone app scope
 
-Only the uploaded frontend and its icons/manifest were integrated; uploaded backend files were not copied over existing fixes.
-Expense and obligation views use the existing summary API. Manual expense entry and payment-plan creation/deletion are unavailable in the current backend and must not be presented as working.
+Backend updates are approved. Port uploaded features selectively while preserving current security, production safeguards, backups, and wishlist fixes. Do not replace the backend wholesale.
+All screens are Arabic RTL, purple/teal, phone-first (390px); desktop keeps a centered frame no wider than 430px. Preserve provider demo data and the safe-to-spend formula. Store only the session token in localStorage. Assistant writes require explicit, expiring, one-time confirmation.
+Use consistent casual Saudi Arabic, address the user in masculine singular, and greet with "هلا نورة". Use هالشهر، الشهر الجاي، الحين، شهور، ر.س. Shared number agreement comes from the language API.
+The basic plan includes five assistant questions per salary cycle; confirmation/cancellation does not count as another question. Demo reset clears usage. No paid checkout is implemented; upgrade controls only show "قريباً".
+Contact form submissions are stored locally and rate limited. Public email/WhatsApp links need the non-secret settings `MAWID_CONTACT_EMAIL` and `MAWID_CONTACT_WHATSAPP`; do not invent owner contact details.

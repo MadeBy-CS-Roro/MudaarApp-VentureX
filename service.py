@@ -11,6 +11,7 @@ import db
 import detect
 import engine as E
 import provider
+import offers
 
 DEFAULT_BUFFER = 500.0
 
@@ -68,7 +69,7 @@ def _ess_breakdown(txs, salary_day, cur, ov) -> dict:
     for x in txs:
         c = E.cycle_index(x["date"], salary_day)
         if x["direction"] == "debit" and cur - 3 <= c < cur:
-            cat = detect.categorize(x["merchant"], x["description"], ov) or ""
+            cat = x["category"] or detect.categorize(x["merchant"], x["description"], ov) or ""
             if cat.startswith("essential:"):
                 n = cat.split(":", 1)[1]
                 sums[n] = sums.get(n, 0) + x["amount"] / 3
@@ -80,8 +81,9 @@ def connect_bank(con, user_hash: str, bank_id: str) -> dict:
     con.execute("INSERT OR IGNORE INTO users(user_hash, display_name) VALUES (?, ?)", (user_hash, "نورة"))
     user_id = con.execute("SELECT id FROM users WHERE user_hash=?", (user_hash,)).fetchone()["id"]
     # fresh start for the demo
-    for table in ("transactions", "plans", "wishlist", "demo_state", "category_overrides"):
+    for table in ("transactions", "plans", "wishlist", "demo_state", "category_overrides", "pending_actions", "chat_usage"):
         con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+    con.execute("UPDATE consents SET status='revoked' WHERE user_id=?", (user_id,))
 
     consent_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
@@ -110,7 +112,7 @@ def connect_bank(con, user_hash: str, bank_id: str) -> dict:
 
 def revoke(con, user_id: int):
     con.execute("UPDATE consents SET status='revoked' WHERE user_id=?", (user_id,))
-    for table in ("transactions", "plans", "demo_state"):
+    for table in ("transactions", "plans", "demo_state", "wishlist", "category_overrides", "pending_actions", "chat_usage"):
         con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
 
 
@@ -121,7 +123,10 @@ def plans_view(con, user_id: int) -> list[dict]:
         plan = E.Plan(p["id"], p["name"], p["amount"], p["day"], p["active_until"], p["total_count"])
         out.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "amount": p["amount"], "day": p["day"],
                     "total": p["total_count"], "remaining": plan.remaining_from(s.current),
-                    "confirmed": bool(p["confirmed"]), "action": p["action"]})
+                    "confirmed": bool(p["confirmed"]), "action": p["action"],
+                    "source": "manual" if p["merchant"].startswith("MANUAL:") else "bank",
+                    "progress": min(100, max(0, round((p["total_count"] - (plan.remaining_from(s.current) or 0))
+                                       / p["total_count"] * 100))) if p["total_count"] else None})
     return out
 
 
@@ -162,11 +167,13 @@ def summary(con, user_id: int) -> dict:
         alerts.append({"type": "spending_pace", "pct": round(s.spent_now / safe * 100), "days_to_salary": (next_salary - t).days})
     return {
         "today": t.isoformat(),
+        "display_name": con.execute("SELECT display_name FROM users WHERE id=?", (user_id,)).fetchone()["display_name"],
         "salary": {"amount": s.profile.salary, "day": sd, "next_date": next_salary.isoformat(), "days_left": (next_salary - t).days},
         "formula": {"salary": s.profile.salary, "obligations": E.obligations(s, cur),
-                    "essentials": s.profile.essentials, "buffer": s.profile.buffer},
+                    "essentials": s.profile.essentials, "buffer": s.profile.buffer,
+                    "total_obligations": E.obligations(s, cur) + s.profile.essentials},
         "safe_to_spend": safe, "spent": s.spent_now, "available": E.available(s, 0),
-        "obligations_total": E.obligations(s, cur),
+        "obligations_total": E.obligations(s, cur) + s.profile.essentials,
         "plans": sorted(items, key=lambda i: i["due_date"]),
         "alerts": alerts,
         "categories": {"essentials": s.extra["essentials_by_category"], "flexible": s.extra["flexible_by_category"]},
@@ -184,7 +191,15 @@ def wishlist(con, user_id: int) -> list[dict]:
     for r in con.execute("SELECT * FROM wishlist WHERE user_id=? ORDER BY id DESC", (user_id,)):
         item = dict(r)
         st = E.wish_status(s, item)
-        item.update(status=st, when_label=E.month_label(st["whenK"]))
+        label = E.month_label(st["whenK"])
+        if item["method"] == "save":
+            saving = E.save_first(s, item["price"], item["saved"])
+            months = saving["months"]
+            label = ("الحين" if months == 0 else "بعد شهر" if months == 1 else "بعد شهرين" if months == 2
+                     else f"بعد {months} شهور" if months and months <= 10 else f"بعد {months} شهر" if months
+                     else "أكثر من 3 سنين")
+            item["saving"] = saving
+        item.update(status=st, when_label=label)
         out.append(item)
     return out
 
@@ -210,7 +225,7 @@ def update_wish(con, user_id: int, item_id: int, price: float | None = None, met
 # ---------- demo: skip to next month ----------
 def next_month(con, user_id: int) -> dict:
     before = snapshot(con, user_id)
-    leftover = max(0.0, E.available(before, 0))
+    leftover = E.saving_amount(before, 0)
     was_ok = {w["id"]: w["status"]["ok"] for w in wishlist(con, user_id)}
     sd = before.profile.salary_day
     new_start = E.cycle_start(before.current + 1, sd)
@@ -233,3 +248,143 @@ def next_month(con, user_id: int) -> dict:
                 ev["tight"] = E.evaluate(after, w["method"], w["price"], 0)["tight"]
             events.append(ev)
     return {"today": (new_start + timedelta(days=1)).isoformat(), "events": events}
+
+
+# Ported selectively from the uploaded service, preserving current fixes.
+def expenses(con, user_id: int) -> dict:
+    s = snapshot(con, user_id)
+    ov = overrides(con, user_id)
+    rows = con.execute(
+        "SELECT id,date,amount,merchant,description,category,source FROM transactions "
+        "WHERE user_id=? AND direction='debit' AND date<=? ORDER BY date DESC,id DESC",
+        (user_id, s.extra["today"].isoformat())).fetchall()
+    items, by_cat = [], {}
+    for r in rows:
+        if E.cycle_index(date.fromisoformat(r["date"]), s.profile.salary_day) != s.current:
+            continue
+        cat = r["category"] or detect.categorize(r["merchant"], r["description"], ov) or "flexible:غير مصنف"
+        if not (cat.startswith("essential:") or cat.startswith("flexible:")):
+            continue
+        group, name = cat.split(":", 1)
+        items.append({"id": r["id"], "date": r["date"], "name": r["merchant"], "amount": r["amount"],
+                      "category": name, "group": group, "source": r["source"]})
+        entry = by_cat.setdefault(name, {"name": name, "group": group, "count": 0, "total": 0})
+        entry["count"] += 1
+        entry["total"] += r["amount"]
+    total = sum(i["amount"] for i in items)
+    return {"items": items, "total": total, "count": len(items),
+            "average": round(total / len(items), 2) if items else 0,
+            "flexible_total": s.spent_now, "by_category": sorted(by_cat.values(), key=lambda c: -c["total"])}
+
+
+def add_expense(con, user_id: int, name: str, amount: float, category: str) -> None:
+    con.execute("INSERT INTO transactions(user_id,date,amount,direction,merchant,description,category,source) "
+                "VALUES (?,?,?,?,?,?,?,'manual')",
+                (user_id, today(con, user_id).isoformat(), amount, "debit", name, "MANUAL", category))
+
+
+def delete_expense(con, user_id: int, tx_id: int) -> bool:
+    return con.execute("DELETE FROM transactions WHERE id=? AND user_id=? AND source='manual'",
+                       (tx_id, user_id)).rowcount > 0
+
+
+def add_plan(con, user_id: int, name: str, amount: float, day: int, remaining: int | None, kind: str) -> str:
+    cur = snapshot(con, user_id).current
+    pid = "manual_" + uuid.uuid4().hex
+    con.execute("INSERT INTO plans(id,user_id,name,merchant,kind,amount,day,active_until,total_count,confirmed,action) "
+                "VALUES (?,?,?,?,?,?,?,?,?,1,NULL)",
+                (pid, user_id, name, "MANUAL:" + name, kind, amount, day,
+                 None if remaining is None else cur + remaining - 1, remaining))
+    return pid
+
+
+def delete_plan(con, user_id: int, plan_id: str) -> bool:
+    return con.execute("DELETE FROM plans WHERE user_id=? AND id=?", (user_id, plan_id)).rowcount > 0
+
+
+def set_category(con, user_id: int, merchant: str, category: str) -> None:
+    con.execute("INSERT OR REPLACE INTO category_overrides VALUES (?,?,?)", (user_id, merchant, category))
+    con.execute("UPDATE transactions SET category=? WHERE user_id=? AND merchant=?", (category, user_id, merchant))
+
+
+BILL_NAMES = {"SAUDI ELECTRICITY": "فاتورة الكهرباء", "NATIONAL WATER": "فاتورة المياه",
+              "STC": "باقة STC", "MOBILY": "باقة موبايلي", "ZAIN": "باقة زين"}
+
+
+def obligations_view(con, user_id: int) -> dict:
+    s = snapshot(con, user_id)
+    current_summary = summary(con, user_id)
+    items = [{**p, "type": "installment" if p["kind"] in ("bnpl", "loan") else p["kind"], "in_formula": True}
+             for p in current_summary["plans"]]
+    for p in plans_view(con, user_id):
+        if p["remaining"] == 0:
+            items.append({**p, "type": "installment", "status": "completed", "in_formula": False,
+                          "due_date": None})
+    seen = {}
+    ov = overrides(con, user_id)
+    for x in _txs(con, user_id, s.extra["today"]):
+        cat = x["category"] or detect.categorize(x["merchant"], x["description"], ov) or ""
+        if x["direction"] != "debit" or cat not in ("essential:فواتير", "essential:اتصالات"):
+            continue
+        cycle = E.cycle_index(x["date"], s.profile.salary_day)
+        if cycle < s.current - 3:
+            continue
+        bill = seen.setdefault(x["merchant"], {"cycles": set(), "last": x, "paid_now": False})
+        bill["cycles"].add(cycle)
+        bill["last"] = x
+        bill["paid_now"] |= cycle == s.current
+    for merchant, bill in seen.items():
+        if len(bill["cycles"]) < 2:
+            continue
+        x = bill["last"]
+        due = E.due_date_in_cycle(x["date"].day, s.current, s.profile.salary_day)
+        items.append({"id": "bill_" + merchant, "name": BILL_NAMES.get(merchant, merchant),
+                      "type": "bill", "kind": "bill", "amount": x["amount"], "day": x["date"].day,
+                      "due_date": due.isoformat(), "status": "paid" if bill["paid_now"] else
+                      "late" if due < s.extra["today"] else "upcoming", "remaining": None, "total": None,
+                      "action": None, "confirmed": True, "in_formula": False, "source": "bank", "progress": None})
+    return {"total": current_summary["obligations_total"], "plans_total": E.obligations(s, s.current),
+            "essentials_total": s.profile.essentials, "essentials_by_category": s.extra["essentials_by_category"],
+            "bills_total": sum(p["amount"] for p in items if p["type"] == "bill"),
+            "items": sorted(items, key=lambda p: p["due_date"] or "9999"),
+            "counts": {status: sum(p["status"] == status for p in items) for status in ("paid", "upcoming", "late")}}
+
+
+def offer_comparison(con, user_id: int, price: float) -> dict:
+    return offers.compare(snapshot(con, user_id), price)
+
+
+def consume_chat_question(con, user_id: int) -> bool:
+    cycle = snapshot(con, user_id).current
+    return con.execute(
+        "INSERT INTO chat_usage(user_id,cycle,questions) VALUES (?,?,1) "
+        "ON CONFLICT(user_id,cycle) DO UPDATE SET questions=questions+1 WHERE questions<5",
+        (user_id, cycle)).rowcount > 0
+
+
+def account(con, user_id: int, demo_mode: bool) -> dict:
+    import os
+    user = con.execute("SELECT display_name FROM users WHERE id=?", (user_id,)).fetchone()
+    consent = con.execute("SELECT * FROM consents WHERE user_id=? AND status='active' "
+                          "ORDER BY created_at DESC LIMIT 1", (user_id,)).fetchone()
+    bank_id = consent["bank_id"] if consent else None
+    names = {"demo1": "بنك تجريبي", "rajhi": "الراجحي", "snb": "الأهلي", "riyad": "بنك الرياض"}
+    snap = snapshot(con, user_id)
+    usage = con.execute("SELECT questions FROM chat_usage WHERE user_id=? AND cycle=?",
+                        (user_id, snap.current)).fetchone()
+    used = usage["questions"] if usage else 0
+    return {"display_name": user["display_name"], "phone_masked": "05XX XXX 123" if demo_mode else None,
+            "email": "noura@example.com" if demo_mode else None,
+            "bank_id": bank_id, "bank_name": names.get(bank_id, bank_id),
+            "consent_expires_at": consent["expires_at"] if consent else None,
+            "salary_day": snap.profile.salary_day, "demo_mode": demo_mode,
+            "subscription": {"name": "الأساسية", "price": 0, "assistant_questions": 5,
+                             "questions_used": used, "questions_left": max(0, 5 - used)},
+            "tiers": [
+                {"id": "basic", "name": "الأساسية", "price": 0,
+                 "features": ["الرئيسية والتنبيهات", "مقارنة العروض وتجمع أول", "الأمنيات", "المساعد: 5 أسئلة بالشهر"]},
+                {"id": "plus", "name": "بلس", "price": 29,
+                 "features": ["كل مزايا الأساسية", "أسئلة أكثر للمساعد", "تصدير التقارير"]},
+                {"id": "premium", "name": "بريميوم", "price": 79,
+                 "features": ["كل مزايا بلس", "حسابات العائلة", "أسئلة أكثر للمساعد"]}],
+            "contact": {"email": os.getenv("MAWID_CONTACT_EMAIL"), "whatsapp": os.getenv("MAWID_CONTACT_WHATSAPP")}}

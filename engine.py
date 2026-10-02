@@ -95,11 +95,23 @@ def available(s: Snapshot, k: int) -> float:
 METHODS = ("cash", "bnpl4", "fin12")
 
 
+def payment_schedule(count: int, total: float) -> list[float]:
+    """A provider offer may have any positive count and total cost."""
+    if count < 1 or total <= 0:
+        raise ValueError("count and total must be positive")
+    return [total / count] * count
+
+
 def schedule(method: str, price: float) -> tuple[list[float], float]:
     if method == "cash":
         return [price], price
     if method == "bnpl4":
         return [price / 4] * 4, price
+    if method == "bnpl3":
+        return payment_schedule(3, price), price
+    if method == "bnpl6":
+        total = round(price * 1.05, 2)
+        return payment_schedule(6, total), total
     if method == "fin12":
         total = round(price * (1 + FINANCING_PROFIT))
         return [total / 12] * 12, total
@@ -108,6 +120,10 @@ def schedule(method: str, price: float) -> tuple[list[float], float]:
 
 def evaluate(s: Snapshot, method: str, price: float, start: int = 0) -> dict:
     pays, total = schedule(method, price)
+    return evaluate_schedule(s, pays, total, start, method)
+
+
+def evaluate_schedule(s: Snapshot, pays: list[float], total: float, start: int = 0, method: str = "offer") -> dict:
     tight, tight_k = float("inf"), start
     for i, pay in enumerate(pays):
         left = available(s, start + i) - pay
@@ -124,13 +140,31 @@ def earliest_start(s: Snapshot, method: str, price: float) -> Optional[int]:
     return None
 
 
+def saving_amount(s: Snapshot, k: int = 0) -> float:
+    return round(min(s.profile.salary * 0.10, max(0.0, available(s, k))), 2)
+
+
 def save_first(s: Snapshot, price: float, saved: float = 0) -> dict:
-    total = saved
+    accumulated = saved
+    progress = []
+    if saved >= price:
+        return {"buyK": 0, "months": 0, "total": price, "saved": saved, "monthly": 0,
+                "salary_pct": 0, "max_monthly": round(s.profile.salary * .1, 2), "progress": []}
     for k in range(SAVE_HORIZON + 1):
-        total += max(0.0, available(s, k))
-        if total >= price:
-            return {"buyK": k, "total": price}
-    return {"buyK": None, "total": price}
+        amount = min(saving_amount(s, k), max(0, price - accumulated))
+        accumulated += amount
+        progress.append({"k": k, "label": month_label(k), "amount": round(amount, 2),
+                         "date": cycle_start(s.current + k, s.profile.salary_day).isoformat(),
+                         "cumulative": round(accumulated, 2), "pct": min(100, round(accumulated / price * 100))})
+        if accumulated >= price:
+            break
+    reached = accumulated >= price
+    first = progress[0]["amount"]
+    # k=0 is a deposit now; k=4 is four months from now (five deposits including today).
+    return {"buyK": k if reached else None, "months": k if reached else None,
+            "total": price, "saved": saved, "monthly": first,
+            "salary_pct": round(first / s.profile.salary * 100, 2) if s.profile.salary else 0,
+            "max_monthly": round(s.profile.salary * .1, 2), "progress": progress}
 
 
 def compare(s: Snapshot, price: float) -> dict:

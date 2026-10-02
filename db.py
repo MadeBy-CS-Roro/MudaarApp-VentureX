@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   direction TEXT NOT NULL,                 -- debit | credit
   merchant TEXT NOT NULL,
   description TEXT,
-  category TEXT                            -- essential:<name> | flexible:<name> | installment | income | NULL
+  category TEXT,                           -- essential:<name> | flexible:<name> | installment | income | NULL
+  source TEXT NOT NULL DEFAULT 'bank'
 );
 CREATE INDEX IF NOT EXISTS ix_tx_user_date ON transactions(user_id, date);
 CREATE TABLE IF NOT EXISTS plans (
@@ -71,6 +72,29 @@ CREATE TABLE IF NOT EXISTS audit_log (
   action TEXT NOT NULL,
   detail TEXT                              -- JSON, never raw transactions
 );
+CREATE TABLE IF NOT EXISTS pending_actions (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  tool TEXT NOT NULL,
+  params TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+);
+CREATE INDEX IF NOT EXISTS ix_action_user ON pending_actions(user_id, status);
+CREATE TABLE IF NOT EXISTS contacts (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS chat_usage (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  cycle INTEGER NOT NULL,
+  questions INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, cycle)
+);
 """
 
 
@@ -94,6 +118,9 @@ def tx():
 def init():
     with tx() as con:
         con.executescript(SCHEMA)
+        columns = {r["name"] for r in con.execute("PRAGMA table_info(transactions)")}
+        if "source" not in columns:
+            con.execute("ALTER TABLE transactions ADD COLUMN source TEXT NOT NULL DEFAULT 'bank'")
 
 
 def audit(con, user_hash: str, action: str, detail: dict | None = None):

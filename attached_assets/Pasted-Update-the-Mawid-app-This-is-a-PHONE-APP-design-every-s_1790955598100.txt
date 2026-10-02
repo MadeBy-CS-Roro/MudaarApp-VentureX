@@ -1,0 +1,172 @@
+Update the Mawid (موعد) app. This is a PHONE APP: design every screen for a phone (390px wide).
+On a desktop browser, show the app centered in a phone-width frame (max 430px), never a desktop layout.
+Keep it installable (manifest + icons already exist). Keep Arabic, RTL, and the purple/teal design.
+
+IMPORTANT: Backend changes ARE approved for this task. Replace the old note in replit.md/agent memory
+that says "frontend only". Keep the current security, production mode, and backup work.
+
+==================================================
+0. RESTORE MISSING BACKEND FEATURES
+==================================================
+The file attached_assets/mawid_app_1790950943229.zip contains a newer service.py and main.py with:
+GET/POST/DELETE /api/expenses, GET /api/obligations, POST/DELETE /api/plans (manual obligations),
+and a "source" column (bank|manual) in transactions. Port these into the current backend
+without removing current fixes (wishlist PATCH, production checks, before_salary fix, etc.).
+Remove the "not available in this version" messages from the UI once they work.
+
+==================================================
+1. BOTTOM NAVIGATION (5 tabs, RTL order from right to left)
+==================================================
+المصروفات | الالتزامات | الرئيسية | المخطط | حسابي
+- الرئيسية is in the MIDDLE: a raised circle button (about 60px), filled purple with a white icon,
+  lifted above the bar. The other 4 are normal icon + label.
+- Remove the desktop sidebar and the hamburger menu. Remove the separate الأقساط and المساعد tabs.
+- Top bar on every page: app logo/name on the right, and a HEART ICON on the TOP LEFT that opens
+  قائمة الأمنيات, with a small badge showing the number of items.
+
+==================================================
+2. الالتزامات PAGE (installments move here)
+==================================================
+- One headline number "التزاماتك الشهرية" = installments + rent + everyday essentials
+  (groceries, fuel, bills, telecom: the 3-month average).
+  For Noura: 4,100 + 3,500 = 7,600.
+  DO NOT double count: bills are already inside the essentials average. Show bills as items, but the
+  total must use the essentials average, not average + bills.
+- Tabs inside the page: الكل | الأقساط | المعيشة
+  - الأقساط: each plan card (amount, due day, payments left, progress bar, paid/upcoming badge,
+    open-provider button, confirm/edit). Move everything from the old installments page here.
+  - المعيشة: essentials by category (monthly average) + recurring bills with status.
+- "إضافة التزام" button for manual obligations (name, amount, day, payments left optional, type).
+- The safe-to-spend formula does not change:
+  salary 8,700 − obligations 7,600 − safety buffer 500 = 600. Show it this way on the home page.
+
+==================================================
+3. المخطط (purchase planner)
+==================================================
+a) INSTALLMENT OFFERS FROM PROVIDERS
+- Add backend/offers.py with SAMPLE offers (clearly marked as sample data):
+  تمارا: 3 دفعات، بدون رسوم
+  تابي: 4 دفعات، بدون رسوم
+  تمارا: 6 شهور، رسوم 5%
+  تمويل بنكي: 12 شهر، أرباح 10%
+- Generalize engine.py so a schedule can be any (number of payments, total cost).
+  Keep the existing cash/bnpl4/fin12 functions and their tests working.
+- POST /api/offers {price} returns, for each offer: monthly amount, total cost, extra cost,
+  tightest month, fits now (ok), earliest month it fits.
+  It also returns "best_offer_id" chosen like this:
+  1) offers that fit now first; if none fit now, the one that fits earliest;
+  2) then lowest total cost; 3) then lowest monthly amount.
+- UI: offer cards side by side, with the best one highlighted with a badge "الأوفر لك" (not "ننصحك").
+  Show a small line under the list: "عروض تجريبية للتوضيح. العروض الحقيقية تجي من الجهات بعد الشراكة."
+- Expected for Noura, phone 3,000: best = تابي 4 دفعات, starting الشهر الجاي, 150 left in the tightest month.
+
+b) تجمع أول (SAVE FIRST) PLAN
+- Monthly saving = the SMALLER of (10% of salary) and (what's left that month after obligations
+  and buffer). Never more than 10% of salary, never below 0.
+- Show: النسبة من الراتب, المبلغ الشهري, عدد الشهور, الشهر المتوقع للشراء, and a month-by-month progress list.
+- Expected for Noura, 3,000: 180 this month, then 870/month → reachable بعد 4 شهور.
+- Always show the save-first card at the same size and level as the offers. Never hide it.
+- Update the wishlist "save" method and the assistant to use this same rule.
+
+==================================================
+4. AI ASSISTANT AS A FLOATING CHAT BUBBLE
+==================================================
+- Remove the assistant page. Add a round floating button on the LEFT side of the screen,
+  above the bottom bar, visible on every page.
+- Tapping it opens a bottom sheet (about 85% screen height) with the chat. The conversation
+  stays when the sheet is closed and reopened.
+
+==================================================
+5. ASSISTANT CAN CHANGE THINGS — ONLY AFTER CONFIRMATION
+==================================================
+- Add write tools: add_expense, add_obligation, update_plan (amount / payments left),
+  delete_obligation, add_to_wishlist, remove_from_wishlist, set_category.
+- A write tool must NEVER change data directly. It creates a pending action
+  (id, user, tool, params, created_at, expires after 10 minutes) and returns a short Arabic summary.
+- The chat shows a confirmation card: the summary + buttons "أكّد" and "إلغاء".
+- New endpoints: POST /api/chat/actions/{id}/confirm and /cancel. Confirm runs the SAME service
+  function the UI uses, writes to the audit log, and then refreshes the current page.
+- One confirmation = one action. Expired, cancelled, or another user's actions must fail.
+- The existing add_to_wishlist in assistant.py writes directly. Change it to use pending actions.
+- The rule-based fallback (no API key) must also support:
+  "ضيف مصروف قهوة 20" and "حط الجوال بالأمنيات", with confirmation.
+- Add tests: nothing changes before confirm; confirm applies once; cancel and expiry work.
+
+==================================================
+6. حسابي (ACCOUNT) PAGE
+==================================================
+- User info: الاسم (نورة), رقم الجوال (masked: 05XX XXX 123), الإيميل, البنك المربوط,
+  تاريخ انتهاء الموافقة, يوم الراتب.
+- Current plan card: "باقتك الحالية: الأساسية (مجانية)".
+- Plans comparison table:
+  الأساسية مجاناً | بلس 29 ر.س/شهر | بريميوم 79 ر.س/شهر
+  Everything in the demo (dashboard, alerts, offers comparison, save first, wishlist, assistant with
+  5 questions/month) is in الأساسية. Paid plans only ADD extras: more assistant questions,
+  family accounts, export reports. Upgrade buttons show a toast "قريباً"; no payments.
+- تواصل معنا: email, WhatsApp link, and a short form (name, message) → POST /api/contact
+  (store it in a new contacts table, validate length, rate limit).
+- Keep: privacy points, "إلغاء الموافقة وحذف بياناتي", demo tools ("ابدأ الديمو من جديد",
+  "انتقل للشهر الجاي").
+
+==================================================
+7. ARABIC LANGUAGE REVIEW (apply to ALL text: HTML, JS, assistant.py, main.py, detect.py)
+==================================================
+Style: casual Saudi "white dialect", the SAME style everywhere. No formal MSA sentences.
+Address the user in masculine singular. Neutral greeting: "هلا نورة".
+
+Number agreement — add one helper and use it everywhere:
+1 → "دفعة وحدة" / "يوم واحد"; 2 → "دفعتين" / "يومين";
+3–10 → "3 دفعات" / "3 أيام"; 11+ → "17 دفعة" / "30 يوم".
+(Wrong now: "باقي 1 دفعة", "باقي 17 دفعات", "باقي 1 يوم".)
+
+Use one form only: هالشهر (not هذا الشهر), الشهر الجاي, الحين (not حالياً), شهور (not أشهر), ر.س.
+
+Replace:
+- "تعذر الاتصال بالخدمة" → "فيه مشكلة بالاتصال"
+- "تحقق من اتصالك وحاول مرة ثانية." → "تأكد من النت وجرّب مرة ثانية."
+- "صار خطأ بالاتصال." → "فيه مشكلة بالاتصال، جرّب مرة ثانية."
+- "يُطبّق التصنيف على عمليات المتجر الموجودة، ولا يضيف مصروفاً جديداً." → "التصنيف يتطبق على كل عمليات هالمتجر."
+- "لا تتوفر فئات مصروفات لعرضها حالياً." → "ما فيه مصروفات هالشهر للحين."
+- "اكتب مبلغاً صحيحاً." → "اكتب المبلغ صح."
+- "اكتب عدد دفعات صحيحاً." → "اكتب عدد الدفعات صح."
+- "تم تحديث تفاصيل الخطة وتأكيدها." → "عدّلنا الخطة وأكدناها."
+- "تم تحديث تصنيف المتجر." → "عدّلنا التصنيف."
+- "تم تأكيد الخطة." → "أكدنا الخطة."
+- "هذه النسخة لا توفر تسجيل دخول للإنتاج..." → "تسجيل الدخول مو متاح بهالنسخة."
+- "انسدد هالشهر" → "تسدّد هالشهر"
+- "انتسخ رقم السداد" → "نسخنا رقم السداد"
+- "انلغت الموافقة وانحذفت بياناتك." → "ألغينا الموافقة وحذفنا بياناتك."
+- "بنذكرك" → "بنذكّرك" ; "بذكرك" → "بذكّرك"
+- "تحوش اللي يتبقى" → "تحوّش اللي يتبقى لك"
+- "بأضيق شهر" → "في أضيق شهر"
+- "ما يكفي الحين" → "ما يكفيك الحين"
+- "أثره الشهري" → "كم ينخصم كل شهر"
+- "تشتريه" → "متى تقدر تشتريه"
+- "وش راح توافق عليه" → "وش اللي بتوافق عليه"
+- "تلغي الموافقة بأي وقت، وتنتهي بعد 90 يوم" → "تقدر تلغي الموافقة بأي وقت، وتنتهي لحالها بعد 90 يوم"
+- "تمام، ودّني للوحة" → "تمام، ودّني للرئيسية"
+- "اسأل عن فلوسك بلهجتك. الأرقام من المحرك، والمساعد يشرح بس." → "اسأل عن فلوسك بلهجتك، والأرقام محسوبة من بياناتك."
+- "التمويل محسوب بأرباح 10% للتوضيح..." → "حسبنا التمويل بأرباح 10% كمثال، والنسبة تختلف من جهة لجهة."
+- "معلومات مو استشارة مالية." → "هذي معلومات، مو استشارة مالية."
+- "يحسب…" → "لحظة، أحسب…"
+- "كم علي هالشهر؟" → "كم عليّ هالشهر؟"
+- "اسأليني عن أقساطك، مصاريفك، أو أي شي تفكرين تشترينه." → "اسألني عن أقساطك، مصاريفك، أو أي شي تفكر تشتريه."
+- "انسخ رقم سداد" (detect.py) → "انسخ رقم السداد"
+- "ما فيه حساب مربوط. ابدأ من POST /api/consent." → the user should see "اربط حسابك البنكي أول." (keep the technical text in logs only)
+- Any "عدّله من صفحة الأقساط" → "عدّله من صفحة الالتزامات"
+
+Assistant system prompt (assistant.py): add the rules "رد بلهجة سعودية بيضاء بسيطة ومتسقة",
+"لا تستخدم فصحى رسمية", "طابق العدد مع المعدود صح", "قبل أي تعديل، اعرض الملخص وانتظر التأكيد".
+
+After the changes, read every screen once more and list any Arabic text you were unsure about.
+
+==================================================
+RULES
+==================================================
+- Do not change the demo data in provider.py or the safe-to-spend formula.
+  Expected: available 180, safe to spend 600, obligations 7,600, best offer تابي 4 دفعات
+  from الشهر الجاي, save-first بعد 4 شهور.
+- Update tests for the new expected numbers. All tests must pass (python -m pytest -q).
+- No mock data in the front end; every number comes from the API.
+- Secrets stay in Replit Secrets only.
+- When done: give me the URL, a list of what changed, and a short test checklist I can follow on my phone.

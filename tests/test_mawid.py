@@ -117,7 +117,8 @@ def test_confirm_missing_plan_returns_not_found(client):
 
 def test_summary_numbers(client):
     s = client.get("/api/summary").json()
-    assert s["formula"] == {"salary": 8700, "obligations": 4100, "essentials": 3500, "buffer": 500}
+    assert s["formula"] == {"salary": 8700, "obligations": 4100, "essentials": 3500, "buffer": 500, "total_obligations": 7600}
+    assert s["obligations_total"] == 7600
     assert s["safe_to_spend"] == 600 and s["spent"] == 420 and s["available"] == 180
     before = [a for a in s["alerts"] if a["type"] == "before_salary"][0]
     assert before["amount"] == 600 and before["plans"][0]["name"] == "تمارا"
@@ -129,7 +130,7 @@ def test_scenarios(client):
     assert r["bnpl4"]["tight"] == -570 and r["bnpl4"]["earliest"] == 1
     assert r["fin12"]["total"] == 3300
     assert r["cash"]["earliest"] is None
-    assert r["save"]["buyK"] == 3
+    assert r["save"]["buyK"] == 4
 
 
 def test_chat_fallback_flow(client):

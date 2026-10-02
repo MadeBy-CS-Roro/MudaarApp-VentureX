@@ -1,0 +1,17 @@
+# Mawid phone update API contract
+
+Existing relative API calls and onboarding/confirm/reset/next-month/wishlist PATCH remain supported. UI changes only in static/. Backend owned by main agent. The uploaded instructions attached_assets/Pasted-Update-the-Mawid-app-This-is-a-PHONE-APP-design-every-s_1790955598100.txt are authoritative.
+
+- GET /api/summary retains all fields; obligations_total now means plans + essentials (7600); formula.obligations remains plans only (4100). formula.total_obligations = 7600. display_name added. safe_to_spend 600; spent 420; available 180 unchanged.
+- GET /api/expenses: {items:[{id,date,name,amount,category,group,source}],total,count,average,flexible_total,by_category:[{name,group,count,total}]}.
+- POST /api/expenses {name,amount,category:"flexible:قهوة"} returns expenses shape. DELETE /api/expenses/{id} only manual items.
+- GET /api/obligations: {total:7600,plans_total:4100,essentials_total:3500,bills_total,essentials_by_category:{name:amount},items:[{id,name,type,kind,amount,day,due_date,status,remaining,total,confirmed,action,in_formula,source,progress}],counts:{paid,upcoming,late}}. Bill display only, do not add bills to total. Plans include completed with status completed (not included in total).
+- POST /api/plans {name,amount,day:1..28,remaining:positive integer or null,kind:"bnpl"|"loan"|"recurring"} -> {id,plans}. DELETE /api/plans/{id} -> {plans}.
+- POST /api/plans/{id}/confirm {amount?,remaining?} existing, supports partial updates.
+- POST /api/offers {price} -> {offers:[{id,provider,label,count,fee_pct,method,sample,monthly,total,extra_cost,ok,earliest,earliest_label,tight,tightK,start_tight,start_tightK}],best_offer_id,save:{buyK,months,buy_label,buy_date,total,monthly,salary_pct,max_monthly,progress:[{k,label,date,amount,cumulative,pct}],saved},sample:true}. tight = now; start_tight = at earliest fitting month. Save initial 180 and later 870; months 4. Offers methods bnpl3,bnpl4,bnpl6,fin12; wishlist now supports them plus cash/save. Use show "150 left" from start_tight at earliest.
+- POST /api/chat {message} -> {reply,tools,actions:[{id,tool,summary,created_at,expires_at,status}],mode:"rules"|"llm"}. Chat history remains in UI memory when closed. POST /api/chat/actions/{id}/confirm or /cancel, no body -> {ok,status}; confirmation refresh current page and wish badge.
+- GET /api/account -> {display_name,phone_masked,email,bank_id,bank_name,consent_expires_at,salary_day,demo_mode,subscription:{name,price,assistant_questions},tiers:[{id,name,price,features:[...]}],contact:{email:null|string,whatsapp:null|string}}. Info is synthetic and labelled demo in UI; do not hardcode profile/tier prices in UI. contact values may be null until owner configures real channels; don't fabricate links. Account comparison features and prices API-driven; upgrade toast قريباً, no payments.
+- POST /api/contact {name,message} -> {ok}. Names 1..60, messages 5..2000, rate limited server side; anonymous permitted using IP limit (also signed-in).
+- No localStorage except token. All numeric financial, profile and subscription data from API.
+- Single number agreement helper in Arabic language layer on server: GET /api/language returns forms {payments:{one,two,few,many},days:{one,two,few,many}}; few/many template uses {n}. UI helper reads these forms. Can fetch alongside health during boot.
+- Installable static app: manifest + icons retained, add lightweight service worker (static shell caching only; NEVER cache API/auth). Preserve hash navigation and p-overview element for existing tests.

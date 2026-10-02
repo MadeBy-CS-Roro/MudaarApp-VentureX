@@ -1,918 +1,218 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#7b4fe0">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="موعد">
-<link rel="manifest" href="/static/manifest.json">
-<link rel="icon" type="image/png" href="/static/icon-192.png">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<title>موعد</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root{
-  --bg:#f5f4fb; --bg-2:#f1f7f8; --card:#ffffff; --line:#ecebf3; --line-2:#e2e0ec;
-  --text:#1f1d2b; --muted:#8a8798; --soft:#5f5c70;
-  --violet:#7b4fe0; --violet-2:#c9b9f6; --violet-bg:#f1ecfd;
-  --teal:#3f8f84; --teal-bg:#e6f4f1;
-  --amber:#b7791f; --amber-bg:#fbefc9;
-  --green:#2f8a6a; --green-bg:#e3f5ee;
-  --red:#d64545; --red-bg:#fdeaea;
-  --grey:#e4e4ea;
-  --radius:20px;
-  --shadow:0 1px 2px rgba(31,29,43,.04),0 6px 20px rgba(31,29,43,.05);
-  --font:"IBM Plex Sans Arabic","Segoe UI",Tahoma,system-ui,sans-serif;
-  box-sizing:border-box;
-}
-*,*::before,*::after{box-sizing:inherit}
-html,body{margin:0;min-height:100%;overflow-x:hidden;font-family:var(--font);color:var(--text);background:linear-gradient(160deg,var(--bg),var(--bg-2)) fixed}
-body{font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
-button,input,select{font:inherit;color:inherit}
-button{cursor:pointer}
-:focus-visible{outline:2px solid var(--violet);outline-offset:2px}
-.num{font-variant-numeric:tabular-nums}
-svg.i{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
-
-/* ---------- layout ---------- */
-.shell{display:grid;grid-template-columns:1fr;min-height:100vh}
-.side{display:none}
-.main{padding:calc(16px + env(safe-area-inset-top,0px)) 16px calc(96px + env(safe-area-inset-bottom,0px));max-width:1100px;width:100%;margin:0 auto}
-.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
-.brand{display:flex;align-items:center;gap:10px}
-.logo{width:40px;height:40px;border-radius:12px;background:var(--violet);color:#fff;display:grid;place-items:center;font-weight:700;font-size:18px}
-.brand b{display:block;font-size:18px;line-height:1.2}
-.brand small{color:var(--muted);font-size:12px}
-.iconbtn{width:42px;height:42px;border-radius:12px;border:1px solid var(--line-2);background:var(--card);display:grid;place-items:center}
-
-.nav{display:flex;flex-direction:column;gap:4px}
-.nav a{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;color:var(--soft);text-decoration:none;font-weight:500}
-.nav a[aria-current="page"]{background:var(--violet-bg);color:var(--violet)}
-.nav a:hover{background:#f7f6fc}
-
-.bottom{position:fixed;bottom:0;left:0;right:0;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(5,1fr);padding:6px 4px calc(6px + env(safe-area-inset-bottom,0px));z-index:30}
-.bottom a{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--muted);text-decoration:none;padding:6px 0;border-radius:12px}
-.bottom a[aria-current="page"]{color:var(--violet)}
-.bottom svg.i{width:22px;height:22px}
-
-.drawer{position:fixed;inset:0;background:rgba(31,29,43,.35);z-index:40;display:none}
-.drawer.open{display:block}
-.drawer .panel{position:absolute;top:0;right:0;bottom:0;width:min(300px,84vw);background:var(--card);padding:calc(20px + env(safe-area-inset-top,0px)) 14px 20px;display:flex;flex-direction:column;gap:18px}
-
-@media (min-width:960px){
-  .shell{grid-template-columns:280px 1fr}
-  .side{display:flex;flex-direction:column;justify-content:space-between;background:var(--card);border-inline-start:1px solid var(--line);padding:28px 16px;position:sticky;top:0;height:100vh}
-  .main{padding:36px 32px 40px}
-  .topbar,.bottom{display:none}
-}
-
-/* ---------- page parts ---------- */
-.page{display:none}
-.page.active{display:block}
-.head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:20px}
-h1{font-size:26px;line-height:1.3;margin:0;font-weight:700}
-.sub{color:var(--muted);margin:2px 0 0}
-h2{font-size:17px;margin:0 0 14px;font-weight:600;display:flex;align-items:center;gap:8px}
-h2 svg.i{color:var(--violet)}
-.card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin-bottom:16px}
-.grid{display:grid;gap:14px;margin-bottom:16px}
-.g2{grid-template-columns:1fr 1fr}
-.g4{grid-template-columns:1fr 1fr}
-@media (min-width:960px){.g4{grid-template-columns:repeat(4,1fr)}.g2w{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}}
-.grid>.card{margin:0}
-
-.stat .ic{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;margin-bottom:14px}
-.ic.v{background:var(--violet-bg);color:var(--violet)} .ic.t{background:var(--teal-bg);color:var(--teal)}
-.stat .label{color:var(--muted);font-size:13px}
-.stat .val{font-size:20px;font-weight:700;line-height:1.3;white-space:nowrap}
-@media (min-width:960px){.stat .val{font-size:24px}}
-.stat .val small{font-size:13px;color:var(--muted);font-weight:400;margin-inline-start:4px}
-.stat .note{font-size:12px;color:var(--muted)}
-.stat.hl{outline:2px solid var(--violet-2)}
-.val.violet{color:var(--violet)} .val.teal{color:var(--teal)} .val.red{color:var(--red)}
-
-.btn{border:0;border-radius:14px;padding:12px 18px;font-weight:600;background:var(--violet);color:#fff;display:inline-flex;align-items:center;justify-content:center;gap:8px}
-.btn.block{width:100%}
-.btn.ghost{background:var(--card);color:var(--text);border:1px solid var(--line-2)}
-.btn.soft{background:var(--violet-bg);color:var(--violet)}
-.btn.teal{background:var(--teal)}
-.btn.danger{background:var(--red-bg);color:var(--red)}
-.btn:disabled{opacity:.5;cursor:not-allowed}
-.chip-link{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:12px;background:#f5f5f8;color:var(--soft);font-size:13px;text-decoration:none;border:0}
-.chip-link svg.i{width:15px;height:15px}
-
-.form{display:grid;gap:10px;grid-template-columns:1fr}
-@media (min-width:700px){.form{grid-template-columns:2fr 1fr 1.2fr auto}.form.f5{grid-template-columns:2fr 1fr .8fr 1fr 1.2fr auto}}
-.field label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
-input,select{width:100%;background:var(--card);border:1px solid var(--line-2);border-radius:14px;padding:12px 14px;min-height:48px}
-
-.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
-.row:last-child{border:0}
-.row .r-name{display:flex;align-items:center;gap:8px;color:var(--soft)}
-.row .r-val{font-weight:600}
-
-.badge{font-size:12px;border-radius:999px;padding:3px 10px;font-weight:600;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
-.badge svg.i{width:14px;height:14px}
-.b-paid{background:var(--green-bg);color:var(--green)}
-.b-upcoming{background:var(--amber-bg);color:var(--amber)}
-.b-late{background:var(--red-bg);color:var(--red)}
-.b-violet{background:var(--violet-bg);color:var(--violet)}
-.b-grey{background:#f2f2f5;color:var(--muted)}
-
-/* item cards (installments, obligations, wishlist) */
-.item{display:flex;flex-direction:column;gap:12px}
-.item .top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
-.item .who{display:flex;gap:12px;align-items:center}
-.item .who .ic{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;flex-shrink:0}
-.item .title{font-weight:600;font-size:16px}
-.item .meta{font-size:13px;color:var(--muted)}
-.item .amount{font-size:22px;font-weight:700;color:var(--violet)}
-.item .foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}
-.progress{height:8px;background:var(--violet-bg);border-radius:99px;overflow:hidden}
-.progress span{display:block;height:100%;background:var(--violet);border-radius:99px}
-.progress.t span{background:var(--teal)}
-.linkbtn{background:none;border:0;color:var(--muted);font-size:13px;display:inline-flex;align-items:center;gap:4px;padding:4px}
-.linkbtn:hover{color:var(--red)}
-
-/* donut */
-.donut-wrap{display:flex;flex-direction:column;align-items:center;gap:16px}
-.legend{display:flex;flex-wrap:wrap;gap:8px 16px;justify-content:center;font-size:13px;color:var(--soft)}
-.legend span{display:inline-flex;align-items:center;gap:6px}
-.legend i{width:10px;height:10px;border-radius:50%;display:inline-block}
-
-.alert{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:14px;margin-bottom:10px;font-size:14px}
-.alert:last-child{margin-bottom:0}
-.alert svg.i{margin-top:2px}
-.alert.warn{background:var(--amber-bg);color:#7a5212}
-.alert.good{background:var(--teal-bg);color:#245e56}
-
-/* scenarios */
-.sc{text-align:start;border:1px solid var(--line-2);background:var(--card);border-radius:18px;padding:16px;width:100%;display:flex;flex-direction:column;gap:10px}
-.sc[aria-pressed="true"]{border-color:var(--violet);box-shadow:0 0 0 1px var(--violet) inset}
-.sc .top{display:flex;justify-content:space-between;align-items:center}
-.sc .title{font-weight:600;font-size:16px}
-.sc dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;font-size:14px}
-.sc dt{color:var(--muted)} .sc dd{margin:0;font-weight:500}
-.sc .hint{font-size:13px;color:var(--teal);font-weight:500}
-
-/* chat */
-.chat{display:flex;flex-direction:column;gap:12px;min-height:50vh;padding-bottom:8px}
-.msg{max-width:80%;padding:12px 16px;border-radius:18px;font-size:14px;box-shadow:var(--shadow)}
-.msg.bot{align-self:flex-end;background:var(--card)}
-.msg.user{align-self:flex-start;background:var(--violet);color:#fff}
-.msg .tools{display:block;margin-top:6px;font-size:11px;color:var(--muted);direction:ltr;text-align:right}
-.suggest{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
-.suggest button{border:0;background:var(--violet-bg);color:var(--violet);border-radius:12px;padding:8px 12px;font-size:13px}
-.composer{display:flex;gap:10px;position:sticky;bottom:calc(76px + env(safe-area-inset-bottom,0px))}
-@media (min-width:960px){.composer{bottom:16px}}
-.composer .btn{width:56px;padding:0}
-
-/* onboarding */
-.onboard{position:fixed;inset:0;z-index:50;background:linear-gradient(160deg,var(--bg),var(--bg-2));overflow:auto;display:none}
-.onboard.show{display:block}
-.onboard .inner{max-width:480px;margin:0 auto;padding:calc(28px + env(safe-area-inset-top,0px)) 18px 40px}
-.bank{display:flex;align-items:center;gap:12px;width:100%;padding:14px;border-radius:16px;border:1px solid var(--line-2);background:var(--card);margin-bottom:10px;text-align:start}
-.bank[aria-pressed="true"]{border-color:var(--violet);box-shadow:0 0 0 1px var(--violet) inset}
-.bank .ic{width:38px;height:38px;border-radius:12px;background:var(--violet-bg);color:var(--violet);display:grid;place-items:center;font-weight:700}
-.perm{list-style:none;margin:0;padding:0}
-.perm li{display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
-.perm li:last-child{border:0}
-.ok{color:var(--green)} .no{color:var(--red)}
-.loading{text-align:center;padding:60px 0}
-.spinner{width:44px;height:44px;border-radius:50%;border:3px solid var(--violet-bg);border-top-color:var(--violet);margin:0 auto 16px;animation:spin 1s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-
-.toasts{position:fixed;top:calc(12px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);width:min(440px,calc(100% - 24px));z-index:60;display:flex;flex-direction:column;gap:8px}
-.toast{background:var(--card);border-radius:16px;padding:14px 16px;box-shadow:0 12px 32px rgba(31,29,43,.18);border-inline-start:4px solid var(--violet);font-size:14px;animation:drop .3s ease-out}
-.toast.good{border-color:var(--teal)}
-.toast b{color:var(--violet)} .toast.good b{color:var(--teal)}
-@keyframes drop{from{transform:translateY(-12px);opacity:0}to{transform:none;opacity:1}}
-.empty{color:var(--muted);text-align:center;padding:16px 0;font-size:14px}
-.muted{color:var(--muted);font-size:13px}
-.hide{display:none!important}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#7650d4">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="موعد">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" type="image/png" href="/static/icon-192.png">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <link rel="stylesheet" href="/static/app.css">
+  <title>موعد — فلوسك أوضح</title>
 </head>
 <body>
+  <div class="phone" id="app">
+    <header class="topbar">
+      <a class="brand" href="#overview" aria-label="موعد، الرئيسية">
+        <span class="brand-mark" aria-hidden="true">م</span>
+        <span><b>موعد</b><small>فلوسك أوضح</small></span>
+      </a>
+      <button class="heart-button" id="open-wishlist" aria-label="قائمة الأمنيات">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 8.7c0 5.2-8.8 11-8.8 11s-8.8-5.8-8.8-11A4.6 4.6 0 0 1 12 6a4.6 4.6 0 0 1 8.8 2.7Z"/></svg>
+        <span class="wish-count" id="wish-count" aria-label="عدد الأمنيات">0</span>
+      </button>
+    </header>
 
-<!-- ============ ONBOARDING (bank connection) ============ -->
-<div class="onboard" id="onboard">
-  <div class="inner">
-    <div class="brand" style="margin-bottom:24px"><div class="logo">م</div><div><b>موعد</b><small>أقساطك، مصاريفك، وراتبك بمكان واحد</small></div></div>
+    <main id="main-content">
+      <section class="page" id="p-overview" aria-labelledby="overview-title">
+        <div class="hero-card">
+          <div class="hero-copy"><span class="eyebrow">صورتك المالية</span><h1 id="overview-title">هلا</h1><p id="ov-sub">هذي خطتك لهالشهر</p></div>
+          <div class="hero-mark" aria-hidden="true">م</div>
+        </div>
+        <div id="ov-stats" class="stats-grid"></div>
+        <div id="ov-alerts"></div>
+        <article class="surface formula-card">
+          <div class="section-heading"><div><span class="eyebrow">ببساطة</span><h2>وش يبقى لك؟</h2></div><span class="mini-icon">↘</span></div>
+          <div id="ov-formula" class="formula"></div>
+          <p class="quiet" id="ov-formula-note"></p>
+        </article>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">على بالك</span><h2>الدفعة الجاية</h2></div><a href="#obligations" class="text-link">كل الالتزامات</a></div>
+          <div id="ov-next"></div>
+        </article>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">نظرة سريعة</span><h2>توزيع راتبك</h2></div></div>
+          <div id="ov-chart" class="chart-layout"></div>
+          <div id="ov-legend" class="legend"></div>
+        </article>
+      </section>
 
-    <div id="ob-connect">
-      <h1>اربط حسابك مرة وحدة</h1>
-      <p class="sub" style="margin-bottom:20px">نقرأ عملياتك عشان نلقى أقساطك ونفهم مصاريفك. ما نقدر نحوّل ولا ندفع.</p>
-      <div id="banks"></div>
-      <div class="card">
-        <h2>وش راح توافق عليه</h2>
-        <ul class="perm">
-          <li><span class="ok">✓</span>قراءة الحسابات والرصيد</li>
-          <li><span class="ok">✓</span>قراءة العمليات لآخر 12 شهر</li>
-          <li><span class="no">✕</span>التحويل أو الدفع من حسابك</li>
-          <li><span class="ok">✓</span>تلغي الموافقة بأي وقت، وتنتهي بعد 90 يوم</li>
-        </ul>
-      </div>
-      <button class="btn block" id="btn-connect" disabled>وافق من تطبيق البنك</button>
-      <p class="muted" style="text-align:center;margin-top:10px">بيانات وهمية للهاكاثون</p>
-    </div>
+      <section class="page" id="p-expenses" aria-labelledby="expenses-title">
+        <div class="page-intro"><span class="eyebrow">صرفك بدون تعقيد</span><h1 id="expenses-title">المصروفات</h1><p>سجل مصروفك وشوف وين تروح فلوسك.</p></div>
+        <div id="ex-summary" class="stats-grid"></div>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">أضف من جيبك</span><h2>مصروف جديد</h2></div></div>
+          <form id="expense-form" class="stack-form">
+            <label>وش اشتريت؟<input name="name" required maxlength="60" autocomplete="off" placeholder="مثال: قهوة"></label>
+            <div class="form-row">
+              <label>المبلغ، ر.س<input name="amount" required inputmode="decimal" type="number" min="0.01" step="0.01" placeholder="0"></label>
+              <label>الفئة<select name="category" required><option value="flexible:مطاعم">مطاعم</option><option value="flexible:توصيل">توصيل</option><option value="flexible:تسوق">تسوق</option><option value="flexible:ترفيه">ترفيه</option><option value="flexible:قهوة">قهوة</option><option value="flexible:أخرى">أخرى</option><option value="essential:بقالة">بقالة</option><option value="essential:بنزين">بنزين</option><option value="essential:فواتير">فواتير</option></select></label>
+            </div>
+            <button class="button primary" type="submit">أضف المصروف</button>
+          </form>
+        </article>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">المسجل عندك</span><h2>آخر المصروفات</h2></div></div>
+          <div id="expense-list"></div>
+        </article>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">تصنيف تلقائي</span><h2>عدّل تصنيف متجر</h2></div></div>
+          <p class="quiet">التصنيف يتطبق على كل عمليات هالمتجر.</p>
+          <form id="category-form" class="stack-form">
+            <label>اسم المتجر<input name="merchant" required maxlength="80" placeholder="مثل ما يظهر بكشف الحساب"></label>
+            <label>الفئة<select name="category"><option value="flexible:مطاعم">مرن · مطاعم</option><option value="flexible:توصيل">مرن · توصيل</option><option value="flexible:تسوق">مرن · تسوق</option><option value="flexible:ترفيه">مرن · ترفيه</option><option value="flexible:أخرى">مرن · أخرى</option><option value="essential:بقالة">أساسي · بقالة</option><option value="essential:بنزين">أساسي · بنزين</option><option value="essential:فواتير">أساسي · فواتير</option></select></label>
+            <button class="button secondary" type="submit">حفظ التصنيف</button>
+          </form>
+        </article>
+        <p class="footnote">الأساسيات متوسط آخر 3 شهور، والمصروفات المرنة من دورة الراتب الحالية.</p>
+      </section>
 
-    <div id="ob-loading" class="loading hide"><div class="spinner"></div><div id="ob-loading-text">ننتظر موافقتك من تطبيق البنك…</div></div>
+      <section class="page" id="p-obligations" aria-labelledby="ob-title">
+        <div class="page-intro"><span class="eyebrow">خططك والتزاماتك</span><h1 id="ob-title">الالتزامات</h1><p>كل اللي عليك هالشهر، في مكان واحد.</p></div>
+        <article class="total-card"><span>التزاماتك الشهرية</span><strong id="ob-total">—</strong><small>الأقساط والمعيشة، بدون تكرار الفواتير</small></article>
+        <div class="segmented" role="tablist" aria-label="عرض الالتزامات">
+          <button role="tab" aria-selected="true" data-ob-tab="all">الكل</button>
+          <button role="tab" aria-selected="false" data-ob-tab="plans">الأقساط</button>
+          <button role="tab" aria-selected="false" data-ob-tab="living">المعيشة</button>
+        </div>
+        <div class="stats-grid compact" id="ob-stats"></div>
+        <article class="surface" id="manual-plan-panel">
+          <div class="section-heading"><div><span class="eyebrow">شي مو ظاهر؟</span><h2>إضافة التزام</h2></div></div>
+          <form id="plan-form" class="stack-form">
+            <label>اسم الالتزام<input name="name" required maxlength="80" placeholder="مثال: اشتراك النادي"></label>
+            <div class="form-row">
+              <label>المبلغ الشهري، ر.س<input name="amount" type="number" min="0.01" step="0.01" required inputmode="decimal"></label>
+              <label>يوم الاستحقاق<input name="day" type="number" min="1" max="28" required inputmode="numeric" placeholder="1–28"></label>
+            </div>
+            <div class="form-row">
+              <label>النوع<select name="kind"><option value="recurring">شهري ثابت</option><option value="bnpl">تقسيط</option><option value="loan">تمويل</option></select></label>
+              <label>دفعات باقية، اختياري<input name="remaining" type="number" min="1" max="600" inputmode="numeric" placeholder="بدون عدد محدد"></label>
+            </div>
+            <button class="button primary" type="submit">أضف الالتزام</button>
+          </form>
+        </article>
+        <div id="ob-list"></div>
+        <div id="living-list"></div>
+        <p class="footnote">الأساسيات متوسط آخر 3 شهور. الفواتير تظهر كعناصر، وهي محسوبة ضمن المتوسط أصلًا.</p>
+      </section>
 
-    <div id="ob-production" class="hide">
-      <h1>تسجيل الدخول غير متاح</h1>
-      <p class="sub" style="margin-top:10px">هذه النسخة لا توفر تسجيل دخول للإنتاج. لم يتم ربط حسابك، ولن نبدأ تدفق الموافقة التجريبي.</p>
-    </div>
+      <section class="page" id="p-buy" aria-labelledby="buy-title">
+        <div class="page-intro"><span class="eyebrow">قبل لا تشتري</span><h1 id="buy-title">المخطط</h1><p>قارن الخيارات على وضعك الحقيقي.</p></div>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">خلنا نحسبها</span><h2>وش ناوي تشتري؟</h2></div></div>
+          <form id="planner-form" class="stack-form">
+            <label>اسم المنتج<input id="buy-name" maxlength="60" placeholder="مثال: جوال"></label>
+            <label>السعر، ر.س<input id="buy-price" type="number" min="1" step="0.01" inputmode="decimal" required placeholder="اكتب السعر"></label>
+          </form>
+        </article>
+        <div id="buy-scenarios" class="offer-stack" aria-live="polite"></div>
+        <button class="button primary full" id="btn-buy-wish" type="button" disabled>أضفه للأمنيات بالطريقة المختارة</button>
+        <p class="sample-note">عروض تجريبية للتوضيح. العروض الحقيقية تجي من الجهات بعد الشراكة.</p>
+        <article class="surface explainer">
+          <span class="eyebrow">كيف نحسبها؟</span>
+          <p>نحسب كم ينخصم كل شهر ونشوف أضيق شهر. هامش الأمان 500 ر.س. حسبنا التمويل بأرباح 10% كمثال، والنسبة تختلف من جهة لجهة. هذي معلومات، مو استشارة مالية.</p>
+        </article>
+      </section>
 
-    <div id="ob-error" class="hide">
-      <h1>تعذر الاتصال بالخدمة</h1>
-      <p class="sub" id="ob-error-text" style="margin:10px 0 18px">تحقق من اتصالك وحاول مرة ثانية.</p>
-      <button class="btn block" id="btn-retry">حاول مرة ثانية</button>
-    </div>
+      <section class="page" id="p-account" aria-labelledby="account-title">
+        <div class="page-intro"><span class="eyebrow">كل شي يخصك</span><h1 id="account-title">حسابي</h1><p>بياناتك وخصوصيتك في مكان واحد.</p></div>
+        <div id="account-profile"></div>
+        <div id="account-plan"></div>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">وش يناسبك؟</span><h2>قارن الباقات</h2></div></div>
+          <div id="tiers"></div>
+        </article>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">بياناتك بأمان</span><h2>خصوصيتك</h2></div></div>
+          <ul class="privacy-list"><li>مصاريفك ما تطلع لأي جهة.</li><li>المساعد يشوف الإجماليات، مو عملياتك.</li><li>ما نربح من الرسوم المتأخرة، وما نشجعك على أقساط جديدة.</li><li>تقدر تلغي الموافقة بأي وقت.</li></ul>
+        </article>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">نسمع منك</span><h2>تواصل معنا</h2></div></div>
+          <div id="contact-channels"></div>
+          <form id="contact-form" class="stack-form">
+            <label>اسمك<input name="name" required maxlength="60" autocomplete="name"></label>
+            <label>رسالتك<textarea name="message" required minlength="5" maxlength="2000" rows="4" placeholder="اكتب لنا وش في بالك"></textarea></label>
+            <button class="button secondary" type="submit">إرسال الرسالة</button>
+          </form>
+        </article>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">إدارة الربط</span><h2>إلغاء الموافقة</h2></div></div>
+          <p class="quiet">إذا ألغيت الموافقة، بنحذف بيانات حسابك المرتبطة.</p>
+          <button class="button danger full" id="btn-revoke" type="button">إلغاء الموافقة وحذف بياناتي</button>
+        </article>
+        <div id="demo-tools"></div>
+      </section>
 
-    <div id="ob-detect" class="hide">
-      <h1 id="ob-detect-title"></h1>
-      <p class="sub" style="margin-bottom:20px">أكّد كل وحدة بضغطة. لو فيه شي غلط، عدّله من صفحة الأقساط.</p>
-      <div class="card" id="ob-plans"></div>
-      <button class="btn block" id="btn-onboard-done" disabled>تمام، ودّني للوحة</button>
-    </div>
+      <section class="page" id="p-wish" aria-labelledby="wish-title">
+        <div class="page-intro"><span class="eyebrow">أشياء على بالك</span><h1 id="wish-title">قائمة الأمنيات</h1><p>بنذكّرك أول ما يصير الشي مناسب لك.</p></div>
+        <article class="surface">
+          <form id="wish-form" class="stack-form">
+            <label>اسم المنتج<input name="name" required maxlength="60" placeholder="وش ودك تشتري؟"></label>
+            <div class="form-row">
+              <label>السعر، ر.س<input name="price" required type="number" min="1" step="0.01" inputmode="decimal"></label>
+              <label>الطريقة<select name="method" id="wish-method"></select></label>
+            </div>
+            <button class="button primary" type="submit">أضف للأمنيات</button>
+          </form>
+        </article>
+        <div id="wish-stats" class="stats-grid compact"></div>
+        <div id="wish-list" class="wish-list"></div>
+        <article class="surface demo-control" id="demo-next-month"><p>تبي تشوف وش يصير الشهر الجاي؟</p><button class="button secondary full" id="btn-next-month" type="button">انتقل للشهر الجاي</button></article>
+      </section>
+    </main>
+
+    <button class="chat-fab" id="chat-open" aria-label="افتح المساعد" aria-expanded="false">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-10.9 6.7L4 20l1.4-5A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11h.01M12 11h.01M16 11h.01"/></svg>
+    </button>
+    <nav class="bottom-nav" aria-label="التنقل الرئيسي">
+      <a href="#expenses" data-page="expenses"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v15H4zM8 9h8M8 13h5"/><path d="M8 2v3m8-3v3"/></svg><span>المصروفات</span></a>
+      <a href="#obligations" data-page="obligations"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6zM9 7h6M9 11h6M9 15h4"/></svg><span>الالتزامات</span></a>
+      <a class="home-tab" href="#overview" data-page="overview" aria-label="الرئيسية"><span class="home-orb"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10h-6v-6H9v6H3z"/></svg></span><span>الرئيسية</span></a>
+      <a href="#buy" data-page="buy"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16M6 16l4-5 3 2 5-7"/><path d="M15 6h3v3"/></svg><span>المخطط</span></a>
+      <a href="#account" data-page="account"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span>حسابي</span></a>
+    </nav>
   </div>
-</div>
+  <div class="chat-backdrop" id="chat-backdrop" hidden></div>
+  <section class="chat-sheet" id="chat-sheet" role="dialog" aria-modal="true" aria-labelledby="chat-title" aria-hidden="true">
+    <div class="sheet-grip"></div>
+    <header class="chat-header"><div><span class="eyebrow">مساعد موعد</span><h2 id="chat-title">وش ودك تعرف؟</h2></div><button class="close-button" id="chat-close" aria-label="إغلاق المحادثة">×</button></header>
+    <div class="chat" id="chat-messages" aria-live="polite"></div>
+    <div class="suggestions" id="chat-suggestions"></div>
+    <form class="chat-composer" id="chat-form"><label class="sr-only" for="chat-input">اكتب رسالتك</label><input id="chat-input" maxlength="500" autocomplete="off" placeholder="اكتب رسالتك…"><button class="send-button" type="submit" aria-label="إرسال"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4zM22 2 11 13"/></svg></button></form>
+  </section>
+  <div class="toast-region" id="toasts" role="status" aria-live="polite"></div>
 
-<div class="shell">
-  <!-- ============ SIDEBAR (desktop) ============ -->
-  <aside class="side">
-    <div>
-      <div class="brand" style="margin-bottom:28px;padding:0 6px"><div class="logo">م</div><div><b>موعد</b><small>مساعدك المالي</small></div></div>
-      <nav class="nav" id="nav-side"></nav>
+  <section class="onboarding" id="onboarding" hidden aria-labelledby="onboard-title">
+    <div class="onboarding-content">
+      <div class="brand onboarding-brand"><span class="brand-mark">م</span><span><b>موعد</b><small>فلوسك أوضح</small></span></div>
+      <div id="ob-connect">
+        <span class="eyebrow">نبدأ بخطوة بسيطة</span><h1 id="onboard-title">اربط حسابك البنكي</h1>
+        <p class="intro-copy">نقرأ عملياتك عشان نفهم مصاريفك ونلقى أقساطك. ما نقدر نحوّل ولا ندفع.</p>
+        <div class="bank-list" id="banks"></div>
+        <article class="surface permission-card"><h2>وش اللي بتوافق عليه</h2><ul><li>قراءة الحسابات والرصيد</li><li>قراءة العمليات لآخر 12 شهر</li><li class="not-allowed">ما نقدر نحوّل أو ندفع من حسابك</li><li>تقدر تلغي الموافقة بأي وقت، وتنتهي لحالها بعد 90 يوم</li></ul></article>
+        <button class="button primary full" id="btn-connect" disabled>وافق من تطبيق البنك</button>
+        <p class="quiet centered" id="ob-demo-note">بيانات تجريبية للعرض</p>
+      </div>
+      <div id="ob-loading" hidden><div class="skeleton-block"></div><h2>لحظة، نجهز حسابك…</h2><p class="quiet" id="ob-loading-text">ننتظر موافقتك من تطبيق البنك…</p></div>
+      <div id="ob-production" hidden><span class="eyebrow">موعد</span><h1>تسجيل الدخول مو متاح بهالنسخة.</h1><p class="intro-copy">ما ربطنا حسابك، وما راح نبدأ تدفق موافقة تجريبي.</p></div>
+      <div id="ob-error" hidden><span class="eyebrow">نرجع نحاول</span><h1>فيه مشكلة بالاتصال</h1><p class="intro-copy" id="ob-error-text">تأكد من النت وجرّب مرة ثانية.</p><button class="button primary full" id="btn-retry">حاول مرة ثانية</button></div>
+          <div id="ob-detect" hidden><span class="eyebrow">خطوة أخيرة</span><h1 id="ob-detect-title">راجع الخطط اللي لقيناها</h1><p class="intro-copy">راجع كل خطة وعدّل المبلغ أو الدفعات الباقية، وبعدها أكدها.</p><div class="detected-plans" id="ob-plans"></div><button class="button primary full" id="btn-onboard-done" disabled>تمام، ودّني للرئيسية</button></div>
     </div>
-    <nav class="nav" id="nav-side-bottom"></nav>
-  </aside>
+  </section>
 
-  <main class="main">
-    <div class="topbar">
-      <div class="brand"><div class="logo">م</div><div><b>موعد</b><small>مساعدك المالي</small></div></div>
-      <button class="iconbtn" id="btn-menu" aria-label="القائمة"><svg class="i" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-    </div>
-
-    <!-- OVERVIEW -->
-    <section class="page" id="p-overview">
-      <div class="head"><div><h1 id="ov-hello">أهلاً بك في موعد</h1><p class="sub" id="ov-sub">نظرة عامة على ميزانيتك لهذا الشهر</p></div></div>
-      <div class="grid g4" id="ov-stats"></div>
-      <div id="ov-alerts"></div>
-      <div class="grid g2w">
-        <div class="card">
-          <h2>توزيع الراتب</h2>
-          <div class="donut-wrap"><div id="ov-donut"></div><div class="legend" id="ov-legend"></div></div>
-          <p class="muted" id="ov-formula" style="text-align:center;margin:12px 0 0"></p>
-        </div>
-        <div>
-          <div class="card"><h2><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>الدفعة القادمة</h2><div id="ov-next"></div></div>
-          <div class="card"><h2>إحصائيات سريعة</h2><div id="ov-quick"></div></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- EXPENSES -->
-    <section class="page" id="p-expenses">
-      <div class="head"><div><h1>المصروفات</h1><p class="sub">ملخص المصروفات المرنة لهذا الشهر ومتوسط الأساسيات</p></div></div>
-      <div class="grid g2" id="ex-stats"></div>
-      <div class="card"><h2>المصروفات المرنة حسب الفئة</h2><div id="ex-cats"></div></div>
-      <div class="card">
-        <h2>تصحيح تصنيف متجر</h2>
-        <p class="muted" style="font-size:14px;margin-top:-6px">يُطبّق التصنيف على عمليات المتجر الموجودة، ولا يضيف مصروفاً جديداً.</p>
-        <form class="form" id="f-category">
-          <input id="category-merchant" placeholder="اسم المتجر كما يظهر في كشف الحساب" required maxlength="80">
-          <select id="category-value">
-            <option value="flexible:مطاعم">مرن · مطاعم</option>
-            <option value="flexible:توصيل">مرن · توصيل</option>
-            <option value="flexible:تسوق">مرن · تسوق</option>
-            <option value="flexible:ترفيه">مرن · ترفيه</option>
-            <option value="flexible:أخرى">مرن · أخرى</option>
-            <option value="essential:بقالة">أساسي · بقالة</option>
-            <option value="essential:بنزين">أساسي · بنزين</option>
-            <option value="essential:فواتير">أساسي · فواتير</option>
-          </select>
-          <button class="btn" type="submit">حفظ التصنيف</button>
-        </form>
-      </div>
-      <div class="card">
-        <h2>عن بيانات المصروفات</h2>
-        <p class="muted" style="font-size:14px;line-height:1.9;margin:0">
-          الأرقام المرنة تمثل ما صُرف في دورة الراتب الحالية. الأساسيات متوسط آخر 3 أشهر، وليست إجمالي هذا الشهر.
-          سجل العمليات وإضافة المصروفات اليدوية غير متاحين في هذا الإصدار.
-        </p>
-      </div>
-    </section>
-
-    <!-- INSTALLMENTS -->
-    <section class="page" id="p-plans">
-      <div class="head"><div><h1>الأقساط النشطة</h1><p class="sub">اكتشفناها من حسابك، وتأكيدها بضغطة</p></div></div>
-      <div class="grid g2" id="pl-stats"></div>
-      <div id="pl-list"></div>
-    </section>
-
-    <!-- OBLIGATIONS -->
-    <section class="page" id="p-obligations">
-      <div class="head"><div><h1>الالتزامات</h1><p class="sub">كل اللي عليك هالشهر بمكان واحد</p></div></div>
-      <div class="grid g4" id="ob-stats"></div>
-      <div class="card" id="ob-info">
-        <h2>معلومة عن الالتزامات</h2>
-        <p class="muted" style="font-size:14px;line-height:1.9;margin:0">
-          نعرض الخطط المكتشفة فقط. إضافة التزام يدوي أو حذفه غير متاح حالياً؛ يمكنك تأكيد الخطة أو تعديل مبلغها وعدد دفعاتها.
-        </p>
-      </div>
-      <div id="ob-list"></div>
-      <p class="muted">الأساسيات تظهر كمتوسط آخر 3 شهور. الالتزامات المعروضة هنا هي الخطط المكتشفة، ولا تتوفر قائمة منفصلة بالفواتير.</p>
-    </section>
-
-    <!-- PURCHASE PLANNER -->
-    <section class="page" id="p-buy">
-      <div class="head"><div><h1>مخطط الشراء</h1><p class="sub">قبل لا تشتري، شوف كل الطرق على وضعك الحقيقي</p></div></div>
-      <div class="card">
-        <h2>تفاصيل الشراء</h2>
-        <div class="grid g2" style="margin:0">
-          <div class="field"><label for="buy-name">اسم المنتج</label><input id="buy-name" value="جوال" maxlength="60"></div>
-          <div class="field"><label for="buy-price">السعر (ر.س)</label><input id="buy-price" value="3000" inputmode="decimal"></div>
-        </div>
-      </div>
-      <div class="grid g2w" id="buy-scenarios"></div>
-      <button class="btn block" id="btn-buy-wish" style="margin-bottom:16px"><svg class="i" viewBox="0 0 24 24"><path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/></svg>أضفه لقائمة الأمنيات بالطريقة المختارة</button>
-      <div class="card">
-        <h2>كيف نحسب</h2>
-        <div class="muted" style="font-size:14px;line-height:1.9">
-          نطرح الدفعة من "تقدر تصرف" لكل شهر قادم، ونطلع لك أضيق شهر.<br>
-          "مناسب" يعني ما ينزل أي شهر تحت الصفر، بعد أساسياتك وهامش الأمان (500 ر.س).<br>
-          التمويل محسوب بأرباح 10% للتوضيح، والنسبة تختلف من جهة لجهة. معلومات مو استشارة مالية.
-        </div>
-      </div>
-    </section>
-
-    <!-- WISHLIST -->
-    <section class="page" id="p-wish">
-      <div class="head"><div><h1>قائمة الأمنيات</h1><p class="sub">نذكرك أول ما يصير الشي مناسب لك</p></div></div>
-      <div class="card">
-        <form class="form" id="f-wish">
-          <input id="w-name" placeholder="اسم المنتج" required maxlength="60">
-          <input id="w-price" placeholder="السعر" inputmode="decimal" required>
-          <select id="w-method"><option value="save">تجمع أول</option><option value="cash">كاش</option><option value="bnpl4">4 دفعات</option><option value="fin12">تمويل 12 شهر</option></select>
-          <button class="btn" type="submit"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>إضافة</button>
-        </form>
-      </div>
-      <div class="grid g2" id="w-stats"></div>
-      <div class="grid g2w" id="w-list" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))"></div>
-      <div class="card" id="demo-next-month" style="text-align:center">
-        <button class="btn teal block" id="btn-next-month">انتقل للشهر الجاي</button>
-        <p class="muted" style="margin:8px 0 0">زر للديمو بس، عشان نوري التذكير بدون ما ننتظر شهر</p>
-      </div>
-    </section>
-
-    <!-- ASSISTANT -->
-    <section class="page" id="p-chat">
-      <div class="head"><div><h1>المساعد</h1><p class="sub">اسأل عن فلوسك بلهجتك. الأرقام من المحرك، والمساعد يشرح بس.</p></div></div>
-      <div class="chat" id="chat"></div>
-      <div class="suggest" id="suggest"></div>
-      <form class="composer" id="f-chat">
-        <input id="chat-in" placeholder="اكتب رسالتك…" autocomplete="off" maxlength="500">
-        <button class="btn" type="submit" aria-label="إرسال"><svg class="i" viewBox="0 0 24 24" style="transform:scaleX(-1)"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg></button>
-      </form>
-    </section>
-
-    <!-- SETTINGS -->
-    <section class="page" id="p-settings">
-      <div class="head"><div><h1>الإعدادات</h1><p class="sub">الربط البنكي والخصوصية</p></div></div>
-      <div class="card">
-        <h2>الحساب المربوط</h2>
-        <div class="row"><span class="r-name">البنك</span><span class="r-val">بنك تجريبي</span></div>
-        <div class="row"><span class="r-name">الصلاحيات</span><span class="r-val">قراءة فقط</span></div>
-        <div class="row"><span class="r-name">تنتهي الموافقة</span><span class="r-val num" id="st-exp">بعد 90 يوم</span></div>
-        <button class="btn danger block" id="btn-revoke" style="margin-top:14px">إلغاء الموافقة وحذف بياناتي</button>
-      </div>
-      <div class="card">
-        <h2>خصوصيتك</h2>
-        <div class="muted" style="font-size:14px;line-height:1.9">
-          مصاريفك ما تطلع لأي جهة.<br>
-          المساعد الذكي يشوف إجماليات بس، مو عملياتك.<br>
-          ما نربح من الرسوم المتأخرة، وما نشجعك على أقساط جديدة.
-        </div>
-      </div>
-      <div class="card" id="demo-tools">
-        <h2>أدوات الديمو</h2>
-        <button class="btn ghost block" id="btn-reset">ابدأ الديمو من جديد</button>
-      </div>
-    </section>
-  </main>
-</div>
-
-<nav class="bottom" id="nav-bottom"></nav>
-<div class="drawer" id="drawer"><div class="panel"><div class="brand"><div class="logo">م</div><div><b>موعد</b><small>مساعدك المالي</small></div></div><nav class="nav" id="nav-drawer"></nav></div></div>
-<div class="toasts" id="toasts" aria-live="polite"></div>
-
-<script>
-/* ================= icons ================= */
-const ICON = {
-  grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
-  wallet:'<path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M21 8h-5a3 3 0 0 0 0 6h5z"/>',
-  card:'<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
-  file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/>',
-  calc:'<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h8"/>',
-  heart:'<path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/>',
-  chat:'<path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/>',
-  gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
-  salary:'<path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M21 8h-5a3 3 0 0 0 0 6h5z"/>',
-  trend:'<path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h7v7"/>',
-  piggy:'<path d="M19 9c-.5-2.5-3-5-7-5S5 6 5 9c-1.5 0-2 1-2 2s.5 2 2 2c0 1.5 1 3 2 3.5V20h3v-2h4v2h3v-3.5c1-.6 1.7-1.5 2-2.5h2v-4h-2z"/><circle cx="15" cy="10" r=".5"/>',
-  cal:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>',
-  ext:'<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
-  trash:'<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
-  check:'<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
-  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-  alert:'<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
-  spark:'<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
-  copy:'<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'
-};
-const ic = (n, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24">${ICON[n]}</svg>`;
-
-/* ================= nav ================= */
-const PAGES = [
-  { id: "overview", label: "نظرة عامة", short: "الرئيسية", icon: "grid", bottom: true },
-  { id: "expenses", label: "المصروفات", icon: "wallet" },
-  { id: "plans", label: "الأقساط", icon: "card", bottom: true },
-  { id: "obligations", label: "الالتزامات", icon: "file" },
-  { id: "buy", label: "مخطط الشراء", short: "الشراء", icon: "calc", bottom: true },
-  { id: "wish", label: "قائمة الأمنيات", short: "الأمنيات", icon: "heart", bottom: true },
-  { id: "chat", label: "المساعد", icon: "chat", bottom: true },
-  { id: "settings", label: "الإعدادات", icon: "gear", footer: true }
-];
-const navLink = (p, short) => `<a href="#${p.id}" data-page="${p.id}">${ic(p.icon)}<span>${short && p.short ? p.short : p.label}</span></a>`;
-$("nav-side").innerHTML = PAGES.filter(p => !p.footer).map(p => navLink(p)).join("");
-$("nav-side-bottom").innerHTML = PAGES.filter(p => p.footer).map(p => navLink(p)).join("");
-$("nav-drawer").innerHTML = PAGES.map(p => navLink(p)).join("");
-$("nav-bottom").innerHTML = PAGES.filter(p => p.bottom).map(p => navLink(p, true)).join("");
-function $(id) { return document.getElementById(id); }
-
-$("btn-menu").onclick = () => $("drawer").classList.add("open");
-$("drawer").onclick = e => { if (e.target === $("drawer") || e.target.closest("a")) $("drawer").classList.remove("open"); };
-window.addEventListener("hashchange", route);
-let API_MODE = "unknown";
-let booted = false;
-
-function route() {
-  if (!booted) return;
-  const id = (location.hash || "#overview").slice(1);
-  const page = PAGES.find(p => p.id === id) ? id : "overview";
-  document.querySelectorAll(".page").forEach(s => s.classList.toggle("active", s.id === "p-" + page));
-  document.querySelectorAll("[data-page]").forEach(a => a.setAttribute("aria-current", a.dataset.page === page ? "page" : "false"));
-  window.scrollTo(0, 0);
-  LOADERS[page] && LOADERS[page]().catch(showError);
-}
-
-/* ================= api ================= */
-let TOKEN = null;
-try { TOKEN = localStorage.getItem("mawid_token"); } catch (e) {}
-async function api(path, opts = {}) {
-  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
-  if (TOKEN) headers.Authorization = "Bearer " + TOKEN;
-  const res = await fetch(path, { ...opts, headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error(data.detail ? (typeof data.detail === "string" ? data.detail : "تأكد من البيانات المدخلة.") : "صار خطأ بالاتصال.");
-    err.status = res.status;
-    throw err;
-  }
-  return data;
-}
-function clearToken() {
-  TOKEN = null;
-  try { localStorage.removeItem("mawid_token"); } catch (e) {}
-}
-function showError(e) {
-  const message = String(e && e.message || "صار خطأ. جرب مرة ثانية.");
-  if (e && e.status === 401 || (e && e.status === 404 && /ما فيه حساب مربوط|ابدأ من POST \/api\/consent/.test(message))) {
-    clearToken();
-    if (API_MODE === "production") return showProductionUnavailable();
-    return openOnboarding();
-  }
-  toast(esc(message));
-}
-
-/* ================= helpers ================= */
-const fmt = n => Math.round(n).toLocaleString("en-US");
-const sar = n => `<span class="num">${fmt(n)}</span> ر.س`;
-const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const toNum = s => +String(s).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d.]/g, "");
-const monthLabel = k => k === null || k === undefined ? "بعد أكثر من سنة" : Number(k) === 0 ? "هالشهر" : Number(k) === 1 ? "الشهر الجاي" : Number(k) === 2 ? "بعد شهرين" : Number(k) <= 10 ? `بعد ${esc(k)} شهور` : `بعد ${esc(k)} شهر`;
-const whenDays = d => Number(d) === 0 ? "اليوم" : Number(d) === 1 ? "بكرة" : Number(d) === 2 ? "بعد يومين" : `بعد ${esc(d)} أيام`;
-const METHOD = { cash: "كاش", bnpl4: "4 دفعات", fin12: "تمويل 12 شهر", save: "تجمع أول" };
-function toast(html, good = false, ms = 6000) {
-  const t = document.createElement("div"); t.className = "toast" + (good ? " good" : ""); t.innerHTML = html;
-  $("toasts").appendChild(t); setTimeout(() => t.remove(), ms);
-}
-function stat(label, value, opts = {}) {
-  return `<div class="card stat ${opts.hl ? "hl" : ""}">${opts.icon ? `<div class="ic ${opts.tone || "v"}">${ic(opts.icon)}</div>` : ""}
-    <div class="label">${label}</div><div class="val ${opts.cls || ""}">${value}</div>${opts.note ? `<div class="note">${opts.note}</div>` : ""}</div>`;
-}
-function actionChip(a) {
-  if (!a) return "";
-  if (a.kind === "url") {
-    try {
-      const url = new URL(a.url);
-      if (url.protocol !== "https:") return "";
-      return `<a class="chip-link" href="${esc(url.href)}" target="_blank" rel="noopener">${ic("ext")}${esc(a.label)}</a>`;
-    } catch (e) { return ""; }
-  }
-  if (a.kind === "copy") return `<button class="chip-link" data-copy="${esc(a.value)}">${ic("copy")}${esc(a.label)}</button>`;
-  return "";
-}
-document.addEventListener("click", async e => {
-  const b = e.target.closest("[data-copy]"); if (!b) return;
-  try { await navigator.clipboard.writeText(b.dataset.copy); toast("انتسخ رقم السداد", true, 3000); } catch (x) { toast("رقم السداد: " + esc(b.dataset.copy)); }
-});
-function alertText(a) {
-  if (a.type === "before_salary") {
-    const n = a.plans.length;
-    return { cls: "warn", icon: "alert", html: `<b>${n === 1 ? "عندك دفعة" : `عندك ${n} دفعات`} (${sar(a.amount)}) قبل نزول راتبك:</b> ${a.plans.map(p => `${esc(p.name)} ${whenDays(p.days_until)}`).join("، ")}.` };
-  }
-  if (a.type === "plan_ending") return { cls: "good", icon: "check", html: `<b>أخبار حلوة:</b> خطة ${esc(a.name)} تخلص هالشهر، يعني يرجع لك ${sar(a.frees)} من الشهر الجاي.` };
-  if (a.type === "spending_pace") return { cls: "warn", icon: "clock", html: `صرفت ${a.pct}% من اللي تقدر تصرفه، والراتب بعد ${a.days_to_salary} أيام.` };
-  return null;
-}
-
-/* ================= overview ================= */
-async function loadOverview() {
-  const [s, w] = await Promise.all([api("/api/summary"), api("/api/wishlist")]);
-  const f = s.formula;
-  $("ov-hello").textContent = "أهلاً نورة";
-  $("ov-sub").textContent = `اليوم ${new Date(s.today).getDate()}، وباقي ${s.salary.days_left} ${s.salary.days_left <= 10 ? "أيام" : "يوم"} على راتبك`;
-  $("ov-stats").innerHTML =
-    stat("الراتب الشهري", sar(f.salary), { icon: "salary" }) +
-    stat("بعد الأساسيات", sar(f.salary - f.essentials), { icon: "trend", tone: "t", note: `الأساسيات ${fmt(f.essentials)} (متوسط 3 شهور)` }) +
-    stat("الأقساط والالتزامات", `${sar(s.obligations_total)}<small>/شهر</small>`, { icon: "card" }) +
-    stat("تقدر تصرف هالشهر", sar(s.available), { icon: "piggy", tone: "t", hl: true, cls: s.available < 0 ? "red" : "teal", note: `من أصل ${fmt(s.safe_to_spend)}، صرفت ${fmt(s.spent)}` });
-
-  $("ov-alerts").innerHTML = s.alerts.length ? `<div class="card">${s.alerts.map(alertText).filter(Boolean).map(a => `<div class="alert ${a.cls}">${ic(a.icon)}<div>${a.html}</div></div>`).join("")}</div>` : "";
-
-  const parts = [
-    { label: "الأساسيات", value: f.essentials, color: "var(--violet)" },
-    { label: "الأقساط", value: f.obligations, color: "var(--teal)" },
-    { label: "تقدر تصرف", value: Math.max(0, s.safe_to_spend), color: "var(--violet-2)" },
-    { label: "هامش الأمان", value: f.buffer, color: "var(--grey)" }
-  ];
-  $("ov-donut").innerHTML = donut(parts);
-  $("ov-legend").innerHTML = parts.map(p => `<span><i style="background:${p.color}"></i>${p.label} ${fmt(p.value)}</span>`).join("");
-  $("ov-formula").innerHTML = `${fmt(f.salary)} − ${fmt(f.obligations)} − ${fmt(f.essentials)} − ${fmt(f.buffer)} = <b class="num">${fmt(s.safe_to_spend)}</b> تقدر تصرف`;
-
-  const next = s.plans.find(p => p.status === "upcoming");
-  $("ov-next").innerHTML = next ? `<div class="row" style="border:0;padding:0">
-      <div><div style="font-weight:600">${esc(next.name)}</div><div class="muted">${whenDays(next.days_until)}، يوم ${next.day}${next.before_salary ? ` <span class="badge b-upcoming">قبل الراتب</span>` : ""}</div></div>
-      <div style="text-align:left"><div class="val violet" style="font-size:22px;font-weight:700">${sar(next.amount)}</div>${next.remaining ? `<div class="muted">باقي ${next.remaining} ${next.remaining === 1 ? "دفعة" : "دفعات"}</div>` : ""}</div></div>`
-    : `<div class="empty">ما فيه دفعات باقية هالشهر.</div>`;
-
-  const q = [
-    ["wallet", "مصروفات مرنة هالشهر", sar(s.spent)],
-    ["card", "التزامات نشطة", s.plans.length],
-    ["heart", "أمنيات", w.items.length],
-    ["cal", "يوم الراتب", `${s.salary.day} من كل شهر`]
-  ];
-  $("ov-quick").innerHTML = q.map(([i, l, v]) => `<div class="row"><span class="r-name">${ic(i)}${l}</span><span class="r-val">${v}</span></div>`).join("");
-}
-function donut(parts) {
-  const total = parts.reduce((a, p) => a + p.value, 0) || 1, r = 70, c = 2 * Math.PI * r;
-  let off = 0;
-  const segs = parts.map(p => { const len = p.value / total * c; const s = `<circle r="${r}" cx="100" cy="100" fill="none" stroke="${p.color}" stroke-width="30" stroke-dasharray="${Math.max(0, len - 3)} ${c}" stroke-dashoffset="${-off}"/>`; off += len; return s; }).join("");
-  return `<svg viewBox="0 0 200 200" width="210" height="210" role="img" aria-label="توزيع الراتب"><g transform="rotate(-90 100 100)">${segs}</g></svg>`;
-}
-
-/* ================= expenses ================= */
-async function loadExpenses(data) {
-  const s = data || await api("/api/summary");
-  const cats = s.categories || {};
-  const flexible = cats.flexible || {};
-  const essentials = cats.essentials || {};
-  const flexibleTotal = Object.values(flexible).reduce((sum, value) => sum + Number(value || 0), 0);
-  const essentialsAverage = Object.values(essentials).reduce((sum, value) => sum + Number(value || 0), 0);
-  $("ex-stats").innerHTML =
-    stat("مصروفات مرنة في دورة الراتب الحالية", sar(flexibleTotal), { cls: "violet", note: "المبلغ الحالي المصنف كإنفاق مرن" }) +
-    stat("متوسط الأساسيات", sar(essentialsAverage), { cls: "teal", note: "متوسط شهري محسوب من آخر 3 أشهر" });
-  const flexRows = Object.entries(flexible).map(([name, value]) =>
-    `<div class="row"><span class="r-name">${esc(name)} <span class="badge b-violet">مرن · هذه الدورة</span></span><span class="r-val">${sar(value)}</span></div>`);
-  const essentialRows = Object.entries(essentials).map(([name, value]) =>
-    `<div class="row"><span class="r-name">${esc(name)} <span class="badge b-grey">أساسي · متوسط 3 أشهر</span></span><span class="r-val">${sar(value)}</span></div>`);
-  $("ex-cats").innerHTML = flexRows.concat(essentialRows).join("") ||
-    `<div class="empty">لا تتوفر فئات مصروفات لعرضها حالياً.</div>`;
-}
-$("f-category").onsubmit = async e => {
-  e.preventDefault();
-  const merchant = $("category-merchant").value.trim();
-  if (!merchant) return;
-  try {
-    await api("/api/categories", { method: "POST", body: { merchant, category: $("category-value").value } });
-    await loadExpenses();
-    e.target.reset();
-    toast("تم تحديث تصنيف المتجر.", true, 3000);
-  } catch (err) { showError(err); }
-};
-
-/* ================= installments ================= */
-async function loadPlans() {
-  const s = await api("/api/summary");
-  const plans = s.plans;
-  $("pl-stats").innerHTML = stat("إجمالي الأقساط والالتزامات الشهرية", sar(s.obligations_total), { cls: "violet" }) + stat("عدد الخطط", `<span class="num">${plans.length}</span>`, { cls: "teal" });
-  $("pl-list").innerHTML = plans.map(p => {
-    const completed = p.total ? Math.max(0, Math.min(p.total, p.total - p.remaining)) : 0;
-    const pct = p.total ? Math.round(completed / p.total * 100) : 0;
-    return `<div class="card item">
-      <div class="top">
-        <div class="who"><div class="ic v">${ic("card")}</div><div><div class="title">${esc(p.name)}</div><div class="meta">${ic("cal", "")} يوم ${p.day} من كل شهر</div></div></div>
-        <div style="display:flex;gap:6px;align-items:center">
-          ${p.status === "paid" ? `<span class="badge b-paid">${ic("check")}انسدد هالشهر</span>` : `<span class="badge b-upcoming">${ic("clock")}${whenDays(p.days_until)}</span>`}
-        </div>
-      </div>
-      <div class="top" style="align-items:flex-end">
-        <div><div class="muted">الدفعة الشهرية</div>${p.total ? `<div class="muted">باقي ${fmt(p.remaining)} من ${fmt(p.total)} دفعات</div>` : `<div class="muted">التزام شهري ثابت</div>`}</div>
-        <div style="text-align:left"><div class="amount">${sar(p.amount)}</div>${p.remaining ? `<div class="muted">باقي ${p.remaining} ${p.remaining === 1 ? "دفعة" : "دفعات"}</div>` : ""}</div>
-      </div>
-      ${p.total ? `<div class="progress"><span style="width:${pct}%"></span></div>` : ""}
-      <div class="foot">
-        ${actionChip(p.action) || "<span></span>"}
-        <span style="display:flex;align-items:center;gap:8px">${p.confirmed ? `<span class="badge b-violet">${ic("check")}مؤكد</span>` : `<button class="btn soft" data-confirm="${esc(p.id)}" style="padding:8px 14px">أكّد الخطة</button>`}<button class="linkbtn" data-edit-plan="${esc(p.id)}" data-amount="${esc(p.amount)}" data-remaining="${esc(p.remaining ?? "")}" data-total="${esc(p.total ?? "")}" type="button">تعديل</button></span>
-      </div>
-    </div>`;
-  }).join("") || `<div class="card empty">ما لقينا أقساط نشطة.</div>`;
-}
-$("pl-list").onclick = async e => {
-  const c = e.target.closest("[data-confirm]"), edit = e.target.closest("[data-edit-plan]");
-  if (c) await updatePlan(c.dataset.confirm, false, "plans", c);
-  if (edit) await updatePlan(edit.dataset.editPlan, true, "plans", edit);
-};
-
-/* ================= obligations ================= */
-const STATUS = { paid: ["b-paid", "check", "مدفوع"], upcoming: ["b-upcoming", "clock", "قادم"], late: ["b-late", "alert", "متأخر"] };
-async function loadObligations() {
-  const s = await api("/api/summary");
-  renderObligations(s);
-}
-function renderObligations(s) {
-  const plans = Array.isArray(s.plans) ? s.plans : [];
-  const paid = plans.filter(p => p.status === "paid").length;
-  const upcoming = plans.filter(p => p.status === "upcoming").length;
-  $("ob-stats").innerHTML =
-    stat("إجمالي الالتزامات هذا الشهر", sar(s.obligations_total), { cls: "violet" }) +
-    stat("مدفوع هذا الشهر", `<span class="num">${paid}</span>`, { cls: "teal" }) +
-    stat("قادم هذا الشهر", `<span class="num">${upcoming}</span>`, { cls: "violet" });
-  $("ob-list").innerHTML = plans.map(p => {
-    const [cls, icon, label] = STATUS[p.status] || STATUS.upcoming;
-    return `<div class="card item">
-      <div class="top">
-        <div class="who"><div class="ic v">${ic("card")}</div><div><div class="title">${esc(p.name)}</div><div class="meta">يوم ${fmt(p.day)} من كل شهر</div></div></div>
-        <span class="badge ${cls}">${ic(icon)}${label}</span>
-      </div>
-      <div class="top" style="align-items:flex-end"><div>${actionChip(p.action) || ""}</div>
-        <div style="text-align:left"><div class="muted">الدفعة الشهرية</div><div class="amount">${sar(p.amount)}</div>${p.remaining !== null && p.remaining !== undefined ? `<div class="muted">باقي ${fmt(p.remaining)} ${p.remaining === 1 ? "دفعة" : "دفعات"}</div>` : ""}</div></div>
-      <div class="foot"><span>${p.confirmed ? `<span class="badge b-violet">${ic("check")}مؤكد</span>` : `<button class="btn soft" data-ob-confirm="${esc(p.id)}" style="padding:8px 14px">أكّد الخطة</button>`}</span><button class="linkbtn" data-ob-edit="${esc(p.id)}" data-amount="${esc(p.amount)}" data-remaining="${esc(p.remaining ?? "")}" data-total="${esc(p.total ?? "")}" type="button">تعديل</button></div>
-    </div>`;
-  }).join("") || `<div class="card empty">ما لقينا أقساط نشطة.</div>`;
-}
-$("ob-list").onclick = async e => {
-  const b = e.target.closest("[data-ob-confirm]"), edit = e.target.closest("[data-ob-edit]");
-  if (b) await updatePlan(b.dataset.obConfirm, false, "obligations", b);
-  if (edit) await updatePlan(edit.dataset.obEdit, true, "obligations", edit);
-};
-async function updatePlan(id, edit, source = "plans", button = null) {
-  let body = {};
-  if (edit) {
-    const b = button;
-    const amountRaw = prompt("المبلغ الشهري الجديد", b ? b.dataset.amount : "");
-    if (amountRaw === null) return;
-    const amount = toNum(amountRaw);
-    if (!amount || amount > 1000000) return toast("اكتب مبلغاً صحيحاً.");
-    body.amount = amount;
-    if (b && b.dataset.total !== "") {
-      const remainingRaw = prompt("عدد الدفعات المتبقية", b.dataset.remaining);
-      if (remainingRaw === null) return;
-      const normalized = String(remainingRaw).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d));
-      if (!/^\d+$/.test(normalized) || Number(normalized) > 600) return toast("اكتب عدد دفعات صحيحاً.");
-      body.remaining = Number(normalized);
-    }
-  }
-  try {
-    await api(`/api/plans/${encodeURIComponent(id)}/confirm`, { method: "POST", body });
-    await loadPlans();
-    if (source === "obligations") await loadObligations();
-    toast(edit ? "تم تحديث تفاصيل الخطة وتأكيدها." : "تم تأكيد الخطة.", true, 3000);
-  } catch (err) { showError(err); }
-}
-
-/* ================= purchase planner ================= */
-let chosen = "bnpl4", buyTimer;
-async function loadBuy() {
-  const price = toNum($("buy-price").value);
-  if (!price) { $("buy-scenarios").innerHTML = `<div class="card empty" style="grid-column:1/-1">اكتب السعر عشان نقارن.</div>`; return; }
-  const r = await api("/api/scenarios", { method: "POST", body: { price } });
-  const tight = x => x.tight >= 0 ? `يبقى ${sar(x.tight)} (${monthLabel(x.tightK)})` : `<span style="color:var(--red)">ناقص ${sar(-x.tight)}</span> (${monthLabel(x.tightK)})`;
-  const pill = x => x.ok ? `<span class="badge b-paid">مناسب</span>` : `<span class="badge b-late">ما يكفي الحين</span>`;
-  const later = x => x.ok ? "" : x.earliest === null ? `<div class="hint" style="color:var(--muted)">ما يناسب بهالطريقة. «تجمع أول» أضمن.</div>` : `<div class="hint">يصير مناسب ${monthLabel(x.earliest)}</div>`;
-  const card = (id, title, badge, rows, extra = "") => `<button class="sc" data-m="${id}" aria-pressed="${chosen === id}">
-      <div class="top"><span class="title">${title}</span>${badge}</div><dl>${rows}</dl>${extra}</button>`;
-  $("buy-scenarios").innerHTML =
-    card("save", "تجمع أول", `<span class="badge b-violet">الأقل مخاطرة</span>`,
-      `<dt>أثره الشهري</dt><dd>تحوش اللي يتبقى</dd><dt>التكلفة الكلية</dt><dd>${sar(price)}</dd><dt>أضيق شهر</dt><dd>ولا شهر</dd><dt>تشتريه</dt><dd>${monthLabel(r.save.buyK)}</dd>`) +
-    card("cash", "كاش الحين", pill(r.cash),
-      `<dt>أثره الشهري</dt><dd>${sar(price)} مرة وحدة</dd><dt>التكلفة الكلية</dt><dd>${sar(r.cash.total)}</dd><dt>أضيق شهر</dt><dd>${tight(r.cash)}</dd>`, later(r.cash)) +
-    card("bnpl4", "4 دفعات", pill(r.bnpl4),
-      `<dt>أثره الشهري</dt><dd>${sar(r.bnpl4.monthly)} × 4</dd><dt>التكلفة الكلية</dt><dd>${sar(r.bnpl4.total)}</dd><dt>أضيق شهر</dt><dd>${tight(r.bnpl4)}</dd>`, later(r.bnpl4)) +
-    card("fin12", "تمويل 12 شهر", pill(r.fin12),
-      `<dt>أثره الشهري</dt><dd>${sar(r.fin12.monthly)} × 12</dd><dt>التكلفة الكلية</dt><dd>${sar(r.fin12.total)} <span class="muted">(+${fmt(r.fin12.total - price)})</span></dd><dt>أضيق شهر</dt><dd>${tight(r.fin12)}</dd>`, later(r.fin12));
-}
-$("buy-price").oninput = () => { clearTimeout(buyTimer); buyTimer = setTimeout(() => loadBuy().catch(showError), 250); };
-$("buy-scenarios").onclick = e => {
-  const b = e.target.closest(".sc"); if (!b) return;
-  chosen = b.dataset.m; document.querySelectorAll(".sc").forEach(x => x.setAttribute("aria-pressed", x === b));
-};
-$("btn-buy-wish").onclick = async () => {
-  const price = toNum($("buy-price").value), name = $("buy-name").value.trim() || "منتج";
-  if (!price) return toast("اكتب السعر أول.");
-  try { await api("/api/wishlist", { method: "POST", body: { name, price, method: chosen } }); toast(`انضاف ${esc(name)} للأمنيات (${METHOD[chosen]}). بنذكرك أول ما يصير مناسب.`, true); location.hash = "#wish"; }
-  catch (err) { showError(err); }
-};
-
-/* ================= wishlist ================= */
-async function loadWish(data) {
-  const w = data || await api("/api/wishlist");
-  $("w-stats").innerHTML = stat("عدد الأمنيات", `<span class="num">${w.items.length}</span>`, { cls: "violet" }) + stat("إجمالي القيمة", sar(w.items.reduce((a, i) => a + i.price, 0)), { cls: "teal" });
-  $("w-list").innerHTML = w.items.map(i => {
-    const st = i.status;
-    const line = i.method === "save"
-      ? (st.ok ? "جمعت المبلغ، مناسب الحين" : `توصل للمبلغ ${esc(i.when_label)}`)
-      : (st.ok ? "مناسب لك الحين" : st.whenK === null ? "ما يناسب بهالطريقة، جرب «تجمع أول»" : `يصير مناسب ${esc(i.when_label)}`);
-    return `<div class="card item">
-      <div class="top">
-        <div class="who"><div class="ic v">${ic("heart")}</div><div><div class="title">${esc(i.name)}</div><div class="meta">${METHOD[i.method]}</div></div></div>
-        <button class="linkbtn" data-del-wish="${esc(i.id)}" aria-label="حذف">${ic("trash")}</button>
-      </div>
-      <div class="top" style="align-items:center"><span class="badge ${st.ok ? "b-paid" : "b-upcoming"}">${ic(st.ok ? "check" : "clock")}${line}</span><span class="amount" style="color:var(--text);font-size:20px">${sar(i.price)}</span></div>
-       ${i.method === "save" ? `<div class="progress t"><span style="width:${Math.max(0, Math.min(100, Number(st.pct) || 0))}%"></span></div><div class="muted">جمعت ${fmt(i.saved)} من ${fmt(i.price)} (${fmt(st.pct)}%)</div>` : ""}
-      <div class="foot"><button class="chip-link" data-plan="${esc(i.id)}" data-name="${esc(i.name)}" data-price="${esc(i.price)}">${ic("calc")}قارن طرق الشراء</button></div>
-    </div>`;
-  }).join("") || `<div class="card empty">قائمتك فاضية. أضف أي شي تبيه، أو من «مخطط الشراء».</div>`;
-}
-$("f-wish").onsubmit = async e => {
-  e.preventDefault();
-  const price = toNum($("w-price").value);
-  if (!price) return toast("اكتب السعر بالأرقام.");
-  try { await loadWish(await api("/api/wishlist", { method: "POST", body: { name: $("w-name").value.trim(), price, method: $("w-method").value } })); e.target.reset(); }
-  catch (err) { showError(err); }
-};
-$("w-list").onclick = async e => {
-  const d = e.target.closest("[data-del-wish]"), p = e.target.closest("[data-plan]");
-  if (d) { try { await loadWish(await api("/api/wishlist/" + encodeURIComponent(d.dataset.delWish), { method: "DELETE" })); } catch (err) { showError(err); } }
-  if (p) { $("buy-name").value = p.dataset.name; $("buy-price").value = p.dataset.price; location.hash = "#buy"; }
-};
-$("btn-next-month").onclick = async () => {
-  try {
-    const r = await api("/api/demo/next-month", { method: "POST" });
-    r.events.forEach((ev, i) => setTimeout(() => {
-      if (ev.type === "salary") toast(`<b>نزل راتبك</b> ${sar(ev.amount)}`, true, 5000);
-      if (ev.type === "plan_end") toast(`<b>خلصت خطة ${esc(ev.name)}.</b> يرجع لك ${sar(ev.frees)} كل شهر.`, true, 7000);
-      if (ev.type === "wish_affordable") toast(`<b>أخبار حلوة:</b> ${esc(ev.name)} صار مناسب لك${ev.tight !== undefined ? `. بـ${METHOD[ev.method]} يبقى لك ${sar(ev.tight)} بأضيق شهر.` : "."}`, true, 9000);
-    }, i * 900));
-    await loadWish();
-  } catch (err) { showError(err); }
-};
-
-/* ================= assistant ================= */
-const SUGGESTIONS = ["أقدر آخذ جوال بـ 3000 على 4 دفعات؟", "طيب متى أقدر؟", "طيب حطه بقائمة الأمنيات", "كم علي هالشهر؟"];
-$("suggest").innerHTML = SUGGESTIONS.map(s => `<button type="button">${s}</button>`).join("");
-$("suggest").onclick = e => { if (e.target.tagName === "BUTTON") send(e.target.textContent); };
-$("f-chat").onsubmit = e => { e.preventDefault(); const v = $("chat-in").value.trim(); if (v) { $("chat-in").value = ""; send(v); } };
-function bubble(cls, html) { const d = document.createElement("div"); d.className = "msg " + cls; d.innerHTML = html; $("chat").appendChild(d); d.scrollIntoView({ block: "end", behavior: "smooth" }); return d; }
-async function send(text) {
-  bubble("user", esc(text));
-  const t = bubble("bot", `<span class="muted">يحسب…</span>`);
-  try {
-    const r = await api("/api/chat", { method: "POST", body: { message: text } });
-    t.innerHTML = esc(r.reply) + (r.tools && r.tools.length ? `<span class="tools">engine: ${r.tools.map(esc).join(", ")}</span>` : "");
-  } catch (err) { t.textContent = "صار خطأ بالاتصال. جرب مرة ثانية."; }
-}
-bubble("bot", "هلا نورة! أنا مساعد موعد. اسأليني عن أقساطك، مصاريفك، أو أي شي تفكرين تشترينه.");
-
-/* ================= settings ================= */
-$("btn-revoke").onclick = async () => {
-  if (!confirm("متأكد؟ بنلغي الموافقة ونحذف عملياتك وخططك.")) return;
-  try { await api("/api/consent", { method: "DELETE" }); clearToken(); toast("انلغت الموافقة وانحذفت بياناتك.", true); openOnboarding(); }
-  catch (err) { showError(err); }
-};
-$("btn-reset").onclick = async () => {
-  if (API_MODE !== "demo" || !confirm("بنبدأ الديمو من جديد ونمسح البيانات الحالية. تبي نكمل؟")) return;
-  try {
-    const r = await api("/api/demo/reset", { method: "POST" });
-    TOKEN = r.token;
-    try { localStorage.setItem("mawid_token", r.token); } catch (e) {}
-    $("st-exp").textContent = r.expires_at.slice(0, 10);
-    $("onboard").classList.add("show");
-    $("ob-connect").classList.add("hide");
-    $("ob-error").classList.add("hide");
-    $("ob-production").classList.add("hide");
-    $("ob-detect").classList.remove("hide");
-    $("ob-detect-title").textContent = `لقينا ${r.plans_found} التزامات`;
-    renderDetected((await api("/api/plans")).plans);
-  } catch (err) { showError(err); }
-};
-
-/* ================= onboarding ================= */
-const BANKS = [["demo1", "بنك تجريبي أ"], ["demo2", "بنك تجريبي ب"], ["demo3", "بنك تجريبي ج"]];
-let bank = null;
-$("banks").innerHTML = BANKS.map(([id, n]) => `<button class="bank" data-bank="${id}" aria-pressed="false"><span class="ic">${n.slice(-1)}</span>${n}</button>`).join("");
-$("banks").onclick = e => {
-  const b = e.target.closest(".bank"); if (!b) return;
-  bank = b.dataset.bank; document.querySelectorAll(".bank").forEach(x => x.setAttribute("aria-pressed", x === b)); $("btn-connect").disabled = false;
-};
-function openOnboarding() {
-  $("onboard").classList.add("show");
-  if (API_MODE === "production") return showProductionUnavailable();
-  $("ob-error").classList.add("hide");
-  $("ob-production").classList.add("hide");
-  $("ob-connect").classList.remove("hide"); $("ob-loading").classList.add("hide"); $("ob-detect").classList.add("hide");
-}
-function showProductionUnavailable() {
-  $("onboard").classList.add("show");
-  $("ob-connect").classList.add("hide");
-  $("ob-loading").classList.add("hide");
-  $("ob-detect").classList.add("hide");
-  $("ob-error").classList.add("hide");
-  $("ob-production").classList.remove("hide");
-}
-$("btn-connect").onclick = async () => {
-  if (API_MODE === "production") return showProductionUnavailable();
-  if (!bank) return;
-  $("ob-connect").classList.add("hide"); $("ob-loading").classList.remove("hide");
-  const steps = ["ننتظر موافقتك من تطبيق البنك…", "نقرأ عملياتك…", "نكتشف الأقساط ونصنف المصاريف…"];
-  steps.forEach((s, i) => setTimeout(() => $("ob-loading-text").textContent = s, i * 650));
-  try {
-    const [r] = await Promise.all([api("/api/consent", { method: "POST", body: { bank_id: bank } }), new Promise(ok => setTimeout(ok, 2000))]);
-    TOKEN = r.token; try { localStorage.setItem("mawid_token", r.token); } catch (x) {}
-    $("st-exp").textContent = r.expires_at.slice(0, 10);
-    $("ob-loading").classList.add("hide"); $("ob-detect").classList.remove("hide");
-    $("ob-detect-title").textContent = `لقينا ${r.plans_found} التزامات`;
-    renderDetected((await api("/api/plans")).plans);
-  } catch (err) { openOnboarding(); showError(err); }
-};
-function renderDetected(plans) {
-  $("ob-plans").innerHTML = plans.map(p => `<div class="row">
-      <div><div style="font-weight:600">${esc(p.name)}</div><div class="muted">${p.total ? `${p.total} × ${fmt(p.amount)}، باقي ${p.remaining}` : `${fmt(p.amount)} شهري`}، يوم ${p.day}</div></div>
-      ${p.confirmed ? `<span class="badge b-paid">${ic("check")}مؤكد</span>` : `<button class="btn soft" data-ob-confirm="${esc(p.id)}" style="padding:8px 16px">صح</button>`}</div>`).join("") || `<div class="empty">ما فيه أقساط تحتاج التأكيد.</div>`;
-  $("btn-onboard-done").disabled = plans.some(p => !p.confirmed);
-}
-$("ob-plans").onclick = async e => {
-  const b = e.target.closest("[data-ob-confirm]"); if (!b) return;
-  try { renderDetected((await api(`/api/plans/${encodeURIComponent(b.dataset.obConfirm)}/confirm`, { method: "POST", body: {} })).plans); } catch (err) { showError(err); }
-};
-$("btn-onboard-done").onclick = () => { booted = true; $("onboard").classList.remove("show"); location.hash = "#overview"; route(); };
-
-/* ================= boot ================= */
-const LOADERS = { overview: loadOverview, expenses: () => loadExpenses(), plans: loadPlans, obligations: loadObligations, buy: loadBuy, wish: () => loadWish(), settings: async () => {} };
-async function boot() {
-  try {
-    const health = await api("/api/health");
-    API_MODE = health.demo_mode === true ? "demo" : "production";
-    if (API_MODE === "production") {
-      $("demo-next-month").classList.add("hide");
-      $("demo-tools").classList.add("hide");
-      showProductionUnavailable();
-      return;
-    }
-    const summary = await api("/api/summary");
-    if (API_MODE === "demo" && !(Number(summary.salary && summary.salary.amount) > 0)) {
-      clearToken();
-      openOnboarding();
-      return;
-    }
-    booted = true;
-    route();
-  } catch (err) {
-    if (API_MODE === "demo" && (err.status === 401 || err.status === 404)) showError(err);
-    else if (API_MODE === "production") showProductionUnavailable();
-    else showBootFailure();
-  }
-}
-function showBootFailure() {
-  $("onboard").classList.add("show");
-  $("ob-connect").classList.add("hide");
-  $("ob-loading").classList.add("hide");
-  $("ob-detect").classList.add("hide");
-  $("ob-production").classList.add("hide");
-  $("ob-error").classList.remove("hide");
-}
-$("btn-retry").onclick = () => {
-  $("ob-error").classList.add("hide");
-  $("ob-loading-text").textContent = "نعيد محاولة الاتصال بالخدمة…";
-  $("ob-loading").classList.remove("hide");
-  boot();
-};
-boot();
-</script>
+  <script src="/static/app.js" defer></script>
+  <script>if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/static/sw.js").catch(() => {}));</script>
 </body>
 </html>

@@ -3,8 +3,8 @@ name: Uploaded frontend scope
 description: User's integration boundary for the uploaded Mawid app.
 ---
 
-The user requested: “Add only the frontend to the current backend” and “link to backend.”
+Backend changes are approved for the phone-app update. Port missing features from the uploaded backend without replacing current security, production checks, backup work, or wishlist fixes.
 
-**Why:** The user chose frontend-only integration rather than importing the full uploaded app.
+**Why:** The user explicitly replaced the previous frontend-only boundary in the phone-app update instructions.
 
-**How to apply:** Preserve the current backend and recent fixes when integrating the upload. Adapt the frontend to supported APIs; do not overwrite backend code with ZIP versions or add unsupported backend features as part of frontend integration.
+**How to apply:** Merge features selectively rather than overwriting current backend files. Keep the demo provider data and safe-to-spend formula unchanged. All screens stay Arabic RTL and phone-width, including on desktop.

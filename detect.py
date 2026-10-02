@@ -33,7 +33,7 @@ PROVIDERS = {
     "AUTO FINANCE": {"name": "قسط السيارة", "kind": "loan", "default_total": None,
                      "action": {"kind": "url", "label": "افتح تطبيق البنك", "url": "#"}},
     "EJAR": {"name": "الإيجار", "kind": "recurring", "default_total": None,
-             "action": {"kind": "copy", "label": "انسخ رقم سداد", "value_from": r"SADAD (\d+)"}},
+             "action": {"kind": "copy", "label": "انسخ رقم السداد", "value_from": r"SADAD (\d+)"}},
 }
 
 
@@ -129,7 +129,7 @@ def essentials_average(txs: list[dict], salary_day: int, current: int, overrides
     for t in txs:
         if t["direction"] != "debit":
             continue
-        cat = categorize(t["merchant"], t["description"], overrides) or ""
+        cat = t.get("category") or categorize(t["merchant"], t["description"], overrides) or ""
         if cat.startswith("essential:"):
             per_cycle[cycle_index(t["date"], salary_day)] += t["amount"]
     complete = [per_cycle.get(current - k, 0.0) for k in range(1, cycles + 1) if (current - k) in per_cycle]
