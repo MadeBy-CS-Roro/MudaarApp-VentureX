@@ -63,6 +63,37 @@ def test_confirm_plan_edits_update_plans_and_monthly_summary(client):
     assert before_salary["plans"][0]["name"] == "تمارا"
 
 
+@pytest.mark.parametrize(
+    ("correction", "expected_amount", "expected_remaining"),
+    [
+        ({"amount": 850}, 850, 2),
+        ({"remaining": 3}, 600, 3),
+        ({}, 600, 2),
+    ],
+)
+def test_confirm_plan_preserves_unedited_values_in_plans_and_summary(
+    client, correction, expected_amount, expected_remaining
+):
+    response = client.post("/api/plans/tamara/confirm", json=correction)
+    assert response.status_code == 200
+
+    confirmed = {p["id"]: p for p in response.json()["plans"]}["tamara"]
+    assert confirmed["amount"] == expected_amount
+    assert confirmed["remaining"] == expected_remaining
+    assert confirmed["confirmed"] is True
+
+    plans = {p["id"]: p for p in client.get("/api/plans").json()["plans"]}
+    assert plans["tamara"]["amount"] == expected_amount
+    assert plans["tamara"]["remaining"] == expected_remaining
+    assert plans["tamara"]["confirmed"] is True
+
+    summary = client.get("/api/summary").json()
+    tamara = next(p for p in summary["plans"] if p["id"] == "tamara")
+    assert tamara["amount"] == expected_amount
+    assert tamara["remaining"] == expected_remaining
+    assert tamara["confirmed"] is True
+
+
 def test_confirm_missing_plan_returns_not_found(client):
     response = client.post("/api/plans/missing-plan/confirm", json={"amount": 850, "remaining": 3})
     assert response.status_code == 404
