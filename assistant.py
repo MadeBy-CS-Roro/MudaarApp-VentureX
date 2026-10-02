@@ -38,7 +38,7 @@ SYSTEM += """
 - قبل أي تعديل، اعرض الملخص وانتظر التأكيد. أدوات الكتابة تنشئ طلب تأكيد فقط، مو تعديل فعلي.
 - لا تقول إنك أضفت أو حذفت شي قبل ما المستخدم يأكد الطلب.
 - عروض الجهات تجريبية للتوضيح، مو عروض حقيقية. لا توصي بجهة؛ قل الأوفر لك حسب الحسابات.
-- تجمع أول: مبلغ التوفير ما يتعدى 10% من الراتب أو المتاح؛ استخدم نتيجة الأداة بدون حساب من عندك."""
+- تجمع أول: مبلغ التوفير ما يتعدى نسبة الادخار اللي حددها المستخدم أو المتاح؛ استخدم نتيجة الأداة بدون حساب من عندك."""
 
 TOOLS = [
     {"name": "get_month_summary", "description": "Salary day, total obligations this month, safe-to-spend, spent so far, available now, alerts.",
@@ -75,7 +75,7 @@ def run_tool(con, user_id: int, name: str, args: dict) -> dict:
         s = service.summary(con, user_id)
         return {k: s[k] for k in ("salary", "obligations_total", "safe_to_spend", "spent", "available", "alerts")}
     if name == "list_plans":
-        return {"plans": [{k: p[k] for k in ("id", "name", "amount", "day", "remaining", "total")} for p in service.plans_view(con, user_id)]}
+        return {"plans": [{k: p[k] for k in ("id", "name", "amount", "day", "remaining", "total")} for p in service.visible_plans(con, user_id)["plans"]]}
     if name == "get_spending":
         return service.summary(con, user_id)["categories"]
     if name == "compare_scenarios":
@@ -174,7 +174,8 @@ def _chat_rules(con, user_id: int, m: str) -> dict:
 
     if method == "save" and re.search(r"تجمع|أجمع|اجمع|تحوش|تحوّش|ادخ|أدخ|متى", m):
         saving = run_tool(con, user_id, "compare_offers", {"price": price})["save"]
-        return {"reply": f"تقدر تحوّش { _f(saving['monthly'])} ر.س هالشهر، وما نتعدى 10% من راتبك بأي شهر. توصل للمبلغ {saving['buy_label']}.",
+        pct = service.snapshot(con, user_id).profile.savings_pct
+        return {"reply": f"تقدر تحوّش { _f(saving['monthly'])} ر.س هالشهر، وما نتعدى {_f(pct)}% من راتبك بأي شهر. توصل للمبلغ {saving['buy_label']}.",
                 "tools": ["compare_offers"]}
 
     if re.search(r"متى|امتى", m):

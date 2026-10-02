@@ -14,9 +14,32 @@
   let obTab = "all", planBusy = false, expenseBusy = false, chatBusy = false, offerTimer;
   let expenseToday = "";
   const deletingExpenses = new Set();
-  const PAGES = ["overview", "expenses", "obligations", "buy", "account", "wish"];
+  const PAGES = ["overview", "expenses", "obligations", "buy", "account", "wish", "subscriptions"];
   const METHOD_LABELS = { cash: "كاش", save: "تجمع أول", fin12: "تمويل 12 شهر" };
   const METHOD_IDS = ["save", "cash", "bnpl3", "bnpl4", "bnpl6", "fin12"];
+  const appearanceQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  function applyAppearance(value) {
+    const selected = ["light","dark","system"].includes(value) ? value : "system";
+    document.documentElement.dataset.theme = selected;
+    const resolved = selected === "system" ? (appearanceQuery.matches ? "dark" : "light") : selected;
+    document.documentElement.style.colorScheme = resolved;
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) metaTheme.content = resolved === "dark" ? "#211f2b" : "#7650d4";
+    return selected;
+  }
+  let appearance = "system";
+  try { appearance = localStorage.getItem("mawid_appearance") || "system"; } catch (_) {}
+  appearance = applyAppearance(appearance);
+  appearanceQuery.addEventListener?.("change", () => { if (appearance === "system") applyAppearance("system"); });
+  $("theme-choice").value = appearance;
+  $("theme-choice").addEventListener("change", event => {
+    appearance = applyAppearance(event.target.value);
+    try { localStorage.setItem("mawid_appearance", appearance); } catch (_) {}
+  });
+  document.addEventListener("click", event => {
+    if (event.target.closest("[data-retry-smart]")) renderSmartAccount(accountCache?.entitlements || {});
+    if (event.target.closest("[data-retry-forecast]")) renderForecast(accountCache?.entitlements || {});
+  });
 
   async function api(path, options = {}) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -25,10 +48,11 @@
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const raw = data.detail;
-      let message = typeof raw === "string" ? raw : "فيه مشكلة بالاتصال، جرّب مرة ثانية.";
+      let message = typeof raw === "string" ? raw : typeof raw?.message === "string" ? raw.message : "فيه مشكلة بالاتصال، جرّب مرة ثانية.";
       if (/ما فيه حساب مربوط|ابدأ من POST \/api\/consent/.test(message)) message = "اربط حسابك البنكي أول.";
       const error = new Error(message);
       error.status = response.status;
+      error.feature = raw?.feature || data.feature || null;
       throw error;
     }
     return data;
@@ -100,7 +124,7 @@
       else link.removeAttribute("aria-current");
     });
     window.scrollTo({ top: 0, behavior: "instant" });
-    const loaders = { overview: loadOverview, expenses: loadExpenses, obligations: loadObligations, buy: loadOffers, account: loadAccount, wish: loadWishlist };
+    const loaders = { overview: loadOverview, expenses: loadExpenses, obligations: loadObligations, buy: loadOffers, account: loadAccount, wish: loadWishlist, subscriptions: loadSubscriptions };
     const section = $(`p-${page}`);
     section.querySelectorAll(".screen-error,.screen-loading").forEach(node => node.remove());
     const loading = document.createElement("div");
@@ -155,6 +179,16 @@
     if (item.type === "spending_pace") return `<div class="list-row"><div class="row-copy"><div class="row-title">صرفك وصل ${esc(item.pct)}%</div><div class="row-sub">الراتب ${dayLabel(item.days_to_salary)}</div></div></div>`;
     return "";
   }
+  function combinedBudgetWarnings(summary) {
+    const warningAlerts = (summary?.alerts || []).filter(item => typeof item.message === "string" && /budget|essential|personal|أساسي|شخصي|ميزان/i.test(String(item.type || "")));
+    const warnings = [...(summary?.budget?.warnings || []), ...warningAlerts];
+    const unique = new Map();
+    warnings.forEach(item => {
+      const key = item.type || item.message;
+      if (key && !unique.has(key)) unique.set(key, item);
+    });
+    return [...unique.values()];
+  }
   async function loadOverview() {
     const [s, w] = await Promise.all([api("/api/summary"), api("/api/wishlist")]);
     const f = s.formula || {};
@@ -169,7 +203,8 @@
       stat("تقدر تصرف الحين", money(s.available), "teal", `صرفك ${format(s.spent)} ر.س`) +
       stat("هامش الأمان", money(f.buffer), "rose", "ما نحسبه للصرف");
     const alerts = Array.isArray(s.alerts) ? s.alerts.map(alertMarkup).filter(Boolean) : [];
-    $("ov-alerts").innerHTML = alerts.length ? `<article class="surface">${alerts.join("")}</article>` : "";
+    const warnings = combinedBudgetWarnings(s);
+    $("ov-alerts").innerHTML = alerts.length || warnings.length ? `<article class="surface">${alerts.join("")}${warnings.map(item => `<div class="budget-warning">${esc(item.message || "")}</div>`).join("")}</article>` : "";
     const spendable = number(s.safe_to_spend);
     $("ov-formula").innerHTML = `${format(f.salary)} − ${format(totalObligations)} − ${format(f.buffer)} = <strong>${format(spendable)} ر.س</strong>`;
     $("ov-formula-note").textContent = `بعد التزاماتك وهامش الأمان، هذا المبلغ اللي تقدر تصرفه. صرفت للحين ${format(s.spent)} ر.س.`;
@@ -201,6 +236,8 @@
     const categories = Object.entries(summary.categories?.flexible || {}).map(([name, value]) =>
       `<div class="list-row"><span>${esc(name)}</span><strong>${money(value)}</strong></div>`).join("");
     $("ex-summary").innerHTML += `<div class="surface" style="grid-column:1/-1"><h2>المرن حسب الفئة</h2>${categories || '<p class="quiet">ما فيه مصروفات مرنة بهالدورة.</p>'}</div>`;
+    const budgetWarnings = combinedBudgetWarnings(summary);
+    if (budgetWarnings.length) $("ex-summary").insertAdjacentHTML("afterbegin", `<div class="surface budget-warning-panel" style="grid-column:1/-1">${budgetWarnings.map(item => `<p class="budget-warning">${esc(item.message || "")}</p>`).join("")}</div>`);
     expenseToday = summary.today;
     const dateInput = $("expense-form").elements.date;
     dateInput.max = expenseToday;
@@ -273,8 +310,9 @@
     $("ob-stats").innerHTML = stat("قادم هالشهر", format(counts.upcoming), "sand") + stat("تسدّد هالشهر", format(counts.paid), "teal");
     $("ob-list").innerHTML = "";
     $("living-list").innerHTML = "";
-    const plans = (data.items || []).filter(item => item.type === "plan" || item.kind === "bnpl" || item.kind === "loan" || item.kind === "recurring" && item.source === "manual");
-    const living = (data.items || []).filter(item => !plans.includes(item));
+    const activeItems = Array.isArray(data.active_items) ? data.active_items : (data.items || []).filter(item => item.status !== "completed");
+    const plans = activeItems.filter(item => item.type === "plan" || item.kind === "bnpl" || item.kind === "loan" || item.kind === "recurring" && item.source === "manual");
+    const living = activeItems.filter(item => !plans.includes(item));
     if (obTab !== "living") {
       $("ob-list").innerHTML = `<div class="section-heading list-section"><div><span class="eyebrow">الخطط المكتشفة أو المضافة</span><h2>الأقساط</h2></div></div>` + (plans.length ? plans.map(renderPlanCard).join("") : empty("ما عندك أقساط ظاهرة", "إذا عندك التزام يدوي، أضفه من النموذج." ));
     }
@@ -284,6 +322,8 @@
       const bills = living.map(item => renderLivingItem(item)).join("");
       $("living-list").innerHTML = `<article class="surface"><div class="section-heading"><div><span class="eyebrow">متوسط آخر 3 شهور</span><h2>المعيشة</h2></div></div>${categories || empty("ما فيه متوسطات جاهزة", "بتظهر فئات المعيشة بعد توفر بياناتها.")}</article><article class="surface"><div class="section-heading"><div><span class="eyebrow">للعرض فقط</span><h2>الفواتير الدورية</h2></div></div>${bills || empty("ما فيه فواتير دورية", "الفواتير محسوبة ضمن متوسط المعيشة، ما نضيفها مرة ثانية.")}</article>`;
     }
+    if (Number(data.hidden_count) > 0) $("ob-list").insertAdjacentHTML("beforeend", `<article class="lock-card"><strong>${esc(data.locked_message || `فيه ${format(data.hidden_count)} التزامات مخفية`)}</strong><p>ترقّ عشان تشوف ${format(data.hidden_count)} التزامات أكثر.</p><a class="button ghost full" href="#subscriptions">ترقية</a></article>`);
+    renderPreviousPayments(data.previous_payments || []);
   }
   function statusBadge(status) {
     const map = { paid: ["paid", "تسدّد هالشهر"], completed: ["paid", "مكتمل"], upcoming: ["upcoming", "قادم"], late: ["late", "متأخر"] };
@@ -296,12 +336,18 @@
     const pct = Math.max(0, Math.min(100, progress <= 1 ? progress * 100 : progress));
     const manual = plan.source === "manual";
     const deleteButton = manual ? `<button class="danger-action" type="button" data-plan-delete="${esc(plan.id)}">حذف</button>` : "";
+    const payAll = plan.pay_all_total != null && Number.isFinite(Number(plan.pay_all_total)) ? `<button class="small-action" type="button" data-plan-pay-all="${esc(plan.id)}" data-pay-amount="${esc(plan.pay_all_total)}" data-pay-reserved="${esc(plan.pay_all_reserved)}" data-pay-gross="${esc(plan.pay_all_gross)}">تسجيل سداد كامل · ${money(plan.pay_all_total)}</button>` : "";
     return `<article class="item-card">
       <div class="item-head"><div><div class="item-title">${esc(plan.name)}</div><div class="item-meta">يوم ${format(plan.day)} من كل شهر · ${esc(remains)}</div></div><div>${statusBadge(plan.status)}</div></div>
       <div class="item-head" style="align-items:end;margin-top:9px"><span class="item-meta">كم ينخصم كل شهر</span><strong class="item-price">${money(plan.amount)}</strong></div>
       ${plan.total ? `<div class="progress-track" aria-label="التقدم ${Math.round(pct)}%"><span style="width:${pct}%"></span></div><div class="item-meta">${format(number(plan.total) - number(plan.remaining))} من ${esc(languageForm("payments", plan.total))}</div>` : ""}
-      <div class="item-actions">${actionControl(plan.action)}<span>${plan.confirmed ? `<span class="badge sample">مؤكد</span>` : `<button class="small-action" type="button" data-plan-confirm="${esc(plan.id)}">أكد الخطة</button>`} <button class="small-action" type="button" data-plan-edit="${esc(plan.id)}" data-amount="${esc(plan.amount)}" data-remaining="${esc(plan.remaining ?? "")}">تعديل</button> ${deleteButton}</span></div>
+      <div class="item-actions">${actionControl(plan.action)}<span>${plan.confirmed ? `<span class="badge sample">مؤكد</span>` : `<button class="small-action" type="button" data-plan-confirm="${esc(plan.id)}">أكد الخطة</button>`} <button class="small-action" type="button" data-plan-edit="${esc(plan.id)}" data-amount="${esc(plan.amount)}" data-remaining="${esc(plan.remaining ?? "")}">تعديل</button> ${payAll} ${deleteButton}</span></div>
     </article>`;
+  }
+  function renderPreviousPayments(items) {
+    const html = items.length ? items.map(plan => `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(plan.name)}</div><div class="row-sub">مكتمل${plan.completed_at ? ` · ${esc(dateOnly(plan.completed_at))}` : ""}</div></div><strong>${money(plan.amount)}</strong></div>`).join("") : empty("ما فيه مدفوعات سابقة", "الخطط المكتملة بتظهر هنا.");
+    const archive = $("ob-previous-payments");
+    if (archive) archive.innerHTML = html;
   }
   function renderLivingItem(item) {
     return `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(item.name)}</div><div class="row-sub">${item.due_date ? `تستحق ${esc(item.due_date)}` : item.day ? `يوم ${format(item.day)}` : "فاتورة دورية"} · ${statusBadge(item.status)}</div></div><div class="row-amount">${money(item.amount)}</div></div>`;
@@ -316,6 +362,22 @@
     const confirmButton = event.target.closest("[data-plan-confirm]");
     const editButton = event.target.closest("[data-plan-edit]");
     const deleteButton = event.target.closest("[data-plan-delete]");
+    const payAllButton = event.target.closest("[data-plan-pay-all]");
+    if (payAllButton) {
+      const amount = toNum(payAllButton.dataset.payAmount);
+      const reserved = toNum(payAllButton.dataset.payReserved);
+      const explanation = reserved > 0 ?
+        `الإجمالي ${money(payAllButton.dataset.payGross)}، منها ${money(reserved)} محسوبة ضمن التزاماتك هالشهر. المبلغ الإضافي ${money(amount)}، وبنخصمه من المتاح الحين.` :
+        `المبلغ ${money(amount)} محسوب ضمن التزاماتك هالشهر، وما راح نحسبه مرتين.`;
+      if (!window.confirm(`بنسجّل السداد الكامل. ${explanation} هالتسجيل يحرّر الشهور الجاية، بس ما يحوّل ولا يدفع من بنكك. تبي تكمل؟`)) return;
+      payAllButton.disabled = true;
+      try {
+        await api(`/api/plans/${encodeURIComponent(payAllButton.dataset.planPayAll)}/pay-all`, { method: "POST" });
+        await Promise.all([loadObligations(), loadOverview()]);
+        toast("سجلنا السداد الكامل في موعد.");
+      } catch (error) { showError(error); payAllButton.disabled = false; }
+      return;
+    }
     if (confirmButton) await confirmPlan(confirmButton.dataset.planConfirm, {}, confirmButton);
     if (editButton) {
       const amountText = window.prompt("المبلغ الشهري، ر.س", editButton.dataset.amount);
@@ -341,9 +403,11 @@
   });
   function renderObligationsCached() {
     const data = obligationsCache;
-    const plans = (data.items || []).filter(item => item.type === "plan" || ["bnpl","loan","recurring"].includes(item.kind) && item.source === "manual");
-    const living = (data.items || []).filter(item => !plans.includes(item));
+    const activeItems = Array.isArray(data.active_items) ? data.active_items : (data.items || []).filter(item => item.status !== "completed");
+    const plans = activeItems.filter(item => item.type === "plan" || ["bnpl","loan","recurring"].includes(item.kind) && item.source === "manual");
+    const living = activeItems.filter(item => !plans.includes(item));
     $("ob-list").innerHTML = obTab === "living" ? "" : `<div class="section-heading list-section"><div><span class="eyebrow">الخطط المكتشفة أو المضافة</span><h2>الأقساط</h2></div></div>` + (plans.length ? plans.map(renderPlanCard).join("") : empty("ما عندك أقساط ظاهرة", "إذا عندك التزام يدوي، أضفه من النموذج."));
+    if (obTab !== "living" && Number(data.hidden_count) > 0) $("ob-list").insertAdjacentHTML("beforeend", `<article class="lock-card"><strong>${esc(data.locked_message || `فيه ${format(data.hidden_count)} التزامات مخفية`)}</strong><p>ترقّ عشان تشوف ${format(data.hidden_count)} التزامات أكثر.</p><a class="button ghost full" href="#subscriptions">ترقية</a></article>`);
     if (obTab === "plans") { $("living-list").innerHTML = ""; return; }
     const categories = Object.entries(data.essentials_by_category || {}).map(([name, amount]) => `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(name)}</div><div class="row-sub">متوسط شهري</div></div><div class="row-amount">${money(amount)}</div></div>`).join("");
     $("living-list").innerHTML = `<article class="surface"><div class="section-heading"><div><span class="eyebrow">متوسط آخر 3 شهور</span><h2>المعيشة</h2></div></div>${categories || empty("ما فيه متوسطات جاهزة", "بتظهر فئات المعيشة بعد توفر بياناتها.")}</article><article class="surface"><div class="section-heading"><div><span class="eyebrow">للعرض فقط</span><h2>الفواتير الدورية</h2></div></div>${living.length ? living.map(renderLivingItem).join("") : empty("ما فيه فواتير دورية", "الفواتير محسوبة ضمن متوسط المعيشة، ما نضيفها مرة ثانية.")}</article>`;
@@ -370,43 +434,82 @@
     finally { planBusy = false; }
   }
 
+  function showPlannerLock(message = "") {
+    plannerResult = null;
+    $("buy-scenarios").innerHTML = `<article class="lock-card"><span class="lock-mark" aria-hidden="true">ق</span><strong>المخطط ضمن باقات بلس وبريميوم</strong><p>${esc(message || "ترقّ عشان تستخدم محاكاة الالتزامات.")}</p><a class="button primary full" href="#subscriptions">ترقية</a></article>`;
+    $("save-plan").innerHTML = "";
+  }
+  async function plannerEntitled() {
+    if (typeof accountCache?.entitlements?.planner === "boolean") return accountCache.entitlements.planner;
+    const currentId = subscriptionCache?.current?.id;
+    const currentTier = (subscriptionCache?.tiers || []).find(tier => tier.id === currentId);
+    if (typeof currentTier?.planner === "boolean") return currentTier.planner;
+    const account = await api("/api/account");
+    accountCache = account;
+    return typeof account.entitlements?.planner === "boolean" ? account.entitlements.planner : null;
+  }
   async function loadOffers() {
+    let canUsePlanner;
+    try { canUsePlanner = await plannerEntitled(); }
+    catch (error) {
+      $("buy-scenarios").innerHTML = `<div class="empty-state"><strong>ما قدرنا نتحقق من باقتك</strong><button class="button secondary" type="button" id="offers-retry">حاول مرة ثانية</button></div>`;
+      showError(error);
+      return;
+    }
+    if (canUsePlanner === false) {
+      showPlannerLock();
+      return;
+    }
     const price = toNum($("buy-price").value);
-    $("btn-buy-wish").disabled = true;
+    const rawMonths = Number($("buy-target-months").value || 3);
+    const targetMonths = Number.isInteger(rawMonths) && rawMonths >= 1 && rawMonths <= 36 ? rawMonths : 3;
     if (!price || price > 10000000) {
       plannerResult = null;
       $("buy-scenarios").innerHTML = empty("اكتب سعر المنتج", "نقارن لك الطرق بعد ما تدخل السعر.");
+      $("save-plan").innerHTML = "";
       return;
     }
     $("buy-scenarios").innerHTML = `<div class="item-card"><div class="skeleton-block"></div><div class="row-sub">لحظة، نحسب الخيارات…</div></div>`;
     try {
-      const [result, summary] = await Promise.all([api("/api/offers", { method: "POST", body: { price } }), api("/api/summary")]);
+      const [result, summary] = await Promise.all([api("/api/offers", { method: "POST", body: { price, target_months: targetMonths } }), api("/api/summary")]);
       salaryAmount = number(summary.formula?.salary);
       plannerResult = result;
       const bestOffer = (result.offers || []).find(offer => offer.id === result.best_offer_id);
       chosenMethod = bestOffer?.method || (result.offers || [])[0]?.method || "save";
       renderOffers(result, price);
-      $("btn-buy-wish").disabled = false;
-    } catch (error) { $("buy-scenarios").innerHTML = `<div class="empty-state"><strong>ما قدرنا نحسبها</strong><button class="button secondary" type="button" id="offers-retry">حاول مرة ثانية</button></div>`; showError(error); }
+    } catch (error) {
+      if (error.status === 403) {
+        showPlannerLock(error.message);
+      } else {
+        $("buy-scenarios").innerHTML = `<div class="empty-state"><strong>ما قدرنا نحسبها</strong><button class="button secondary" type="button" id="offers-retry">حاول مرة ثانية</button></div>`;
+        showError(error);
+      }
+    }
   }
   function saveCard(save, price) {
     const progress = Array.isArray(save.progress) ? save.progress : [];
-    const months = Number(save.months || progress.length || 0);
+    const months = Number(save.required_months ?? save.months ?? progress.length ?? 0);
     const pct = number(save.salary_pct ?? (salaryAmount ? number(save.monthly) / salaryAmount * 100 : 0));
     const rows = progress.map(step => `<li><b>${esc(step.label || monthLabel(step.k))}:</b> ${money(step.amount)} · المجموع ${money(step.cumulative)}</li>`).join("");
-    return `<button type="button" class="offer-card save-card ${chosenMethod === "save" ? "selected" : ""}" data-method="save">
+    const reachable = save.reachable_in_target;
+    const warning = save.warning || (!reachable && reachable !== null ? `الهدف يحتاج ${format(months)} شهور على الأقل.` : "");
+    const buttons = reachable === false ? `<div class="save-options"><button class="small-action" type="button" data-set-months="${esc(months)}">خلّها ${format(months)} شهور</button><button class="small-action" type="button" data-max-target="${esc(save.max_target)}">عدّل السعر إلى ${money(save.max_target)}</button></div>` : "";
+    return `<article class="offer-card save-card">
       <div class="offer-title">تجمع أول</div><div class="offer-subtitle">خطة ادخار على قد وضعك</div>
       <div class="offer-price">${money(save.monthly)} <small>شهريًا · ${format(pct)}% من الراتب</small></div>
       <div class="offer-detail"><span>عدد الشهور</span><b>${format(months)}</b></div>
       <div class="offer-detail"><span>تقدر تشتريه</span><b>${esc(save.buy_label || monthLabel(save.buyK))}</b></div>
       <div class="offer-detail"><span>قيمة المنتج</span><b>${money(save.total ?? price)}</b></div>
+      ${warning ? `<p class="budget-warning">${esc(warning)}</p>` : ""}
       ${rows ? `<ol class="save-progress-list">${rows}</ol>` : ""}
-    </button>`;
+      ${buttons}
+      <button class="button secondary full" type="button" data-save-wish>أضف للأمنيات</button>
+    </article>`;
   }
   function renderOffers(result, price) {
-    const offers = Array.isArray(result.offers) ? [...result.offers].sort((a, b) =>
-      Number(b.id === result.best_offer_id) - Number(a.id === result.best_offer_id)) : [];
-    const cards = offers.map(offer => {
+    const offers = Array.isArray(result.offers) ? result.offers : [];
+    const bestOffer = offers.find(offer => offer.id === result.best_offer_id) || offers[0];
+    const offerCard = (offer, best = false) => {
       const isBest = offer.id === result.best_offer_id;
       const method = offer.method || offer.id;
       const remaining = offer.tight == null ? "ما فيه شهر مناسب" : Number(offer.tight) >= 0 ? `${money(offer.tight)} تبقى في ${monthLabel(offer.tightK)}` : `${money(-Number(offer.tight))} ناقص في ${monthLabel(offer.tightK)}`;
@@ -415,39 +518,77 @@
       const count = Number(offer.count || 0);
       const fee = number(offer.fee_pct);
       const feeCopy = fee ? `رسوم ${format(fee)}%` : "بدون رسوم";
-      return `<button type="button" class="offer-card ${chosenMethod === method ? "selected" : ""} ${isBest ? "best" : ""}" data-method="${esc(method)}">
+      return `<button type="button" class="offer-card ${chosenMethod === method ? "selected" : ""} ${best ? "best recommended-offer" : ""}" data-method="${esc(method)}">
         <div class="offer-title">${esc(offer.provider)} · ${esc(offer.label)}</div><div class="offer-subtitle">${esc(feeCopy)} · عرض تجريبي</div>
         <div class="offer-price">${money(offer.monthly)} <small>${count ? `× ${esc(languageForm("payments", count))}` : "شهريًا"}</small></div>
         <div class="offer-detail"><span>الإجمالي</span><b>${money(offer.total)}</b></div>
         ${number(offer.extra_cost) ? `<div class="offer-detail"><span>زيادة على السعر</span><b>${money(offer.extra_cost)}</b></div>` : ""}
         <div class="offer-detail"><span>أضيق شهر الحين</span><b>${esc(remaining)}</b></div>
         <div class="offer-note">${fitTiming} · ${esc(startTight)}</div>
+        ${best ? `<p class="offer-reason">${esc(offer.reason || "هذا الخيار الأنسب حسب وضعك الحالي.")}</p>` : ""}
       </button>`;
-    }).join("");
-    $("buy-scenarios").innerHTML = saveCard(result.save || {}, price) + cards;
+    };
+    const others = offers.filter(offer => offer !== bestOffer);
+    $("buy-scenarios").innerHTML = bestOffer ? `<div class="recommended-wrap">${offerCard(bestOffer, true)}<button class="button secondary full" id="btn-buy-wish" type="button" data-selected-wish>أضف للأمنيات</button>${others.length ? `<button class="text-link offer-expander" type="button" aria-expanded="false" data-expand-offers>عرض العروض الثانية</button><div class="other-offers" hidden>${others.map(offer => offerCard(offer)).join("")}</div>` : ""}</div>` : empty("ما لقينا خيارات", "جرّب سعرًا ثانيًا.");
+    $("save-plan").innerHTML = result.save ? saveCard(result.save, price) : "";
+    $("buy-scenarios").querySelectorAll("[data-method]").forEach(card => {
+      card.setAttribute("aria-pressed", String(card.dataset.method === chosenMethod));
+      if (card.dataset.method === chosenMethod) card.classList.add("selected");
+    });
   }
   $("buy-price").addEventListener("input", () => {
     clearTimeout(offerTimer);
     offerTimer = setTimeout(() => loadOffers(), 280);
   });
+  $("buy-target-months").addEventListener("input", () => {
+    clearTimeout(offerTimer);
+    offerTimer = setTimeout(() => loadOffers(), 280);
+  });
   $("buy-scenarios").addEventListener("click", event => {
+    const expand = event.target.closest("[data-expand-offers]");
+    if (expand) {
+      const panel = $("buy-scenarios").querySelector(".other-offers");
+      panel.hidden = !panel.hidden;
+      expand.setAttribute("aria-expanded", String(!panel.hidden));
+      return;
+    }
     const card = event.target.closest("[data-method]");
     if (!card) {
       if (event.target.id === "offers-retry") loadOffers();
       return;
     }
     chosenMethod = card.dataset.method;
-    document.querySelectorAll(".offer-card").forEach(item => item.classList.toggle("selected", item.dataset.method === chosenMethod));
+    document.querySelectorAll("#buy-scenarios .offer-card").forEach(item => {
+      item.classList.toggle("selected", item.dataset.method === chosenMethod);
+      item.setAttribute("aria-pressed", String(item.dataset.method === chosenMethod));
+    });
   });
-  $("btn-buy-wish").addEventListener("click", async event => {
-    const button = event.currentTarget;
+  async function addPlannerWish(method, button) {
     const price = toNum($("buy-price").value), name = $("buy-name").value.trim();
-    if (!price || !name || !chosenMethod) return toast("اكتب اسم المنتج وسعره أول.", "error");
+    if (!price || !name || !method) return toast("اكتب اسم المنتج وسعره أول.", "error");
     if (button.disabled) return;
     button.disabled = true;
-    try { await api("/api/wishlist", { method: "POST", body: { name, price, method: chosenMethod } }); await updateWishCount(); toast(`أضفنا ${name} للأمنيات. بنذكّرك إذا صار مناسب.`); location.hash = "#wish"; }
+    try { await api("/api/wishlist", { method: "POST", body: { name, price, method } }); await updateWishCount(); toast(`أضفنا ${name} للأمنيات. بنذكّرك إذا صار مناسب.`); location.hash = "#wish"; }
     catch (error) { showError(error); }
     finally { button.disabled = false; }
+  }
+  $("buy-scenarios").addEventListener("click", event => {
+    const retry = event.target.closest("#offers-retry");
+    if (retry) loadOffers();
+  });
+  $("save-plan").addEventListener("click", event => {
+    const targetMonths = event.target.closest("[data-set-months]");
+    const maxTarget = event.target.closest("[data-max-target]");
+    const saveWish = event.target.closest("[data-save-wish]");
+    if (targetMonths) { $("buy-target-months").value = targetMonths.dataset.setMonths; loadOffers(); }
+    if (maxTarget) { $("buy-price").value = maxTarget.dataset.maxTarget; loadOffers(); }
+    if (saveWish) addPlannerWish("save", saveWish);
+  });
+  $("buy-scenarios").addEventListener("click", event => {
+    const selected = event.target.closest("[data-method]");
+    if (selected) return;
+    const wishButton = event.target.closest("[data-selected-wish]");
+    if (wishButton) addPlannerWish(chosenMethod, wishButton);
   });
 
   function methodOptions() {
@@ -537,9 +678,86 @@
   });
 
   function dateOnly(date) { if (!date) return "—"; return String(date).slice(0,10); }
+  let accountCache = null, subscriptionCache = null, budgetCache = null;
+  const budgetColors = ["#7650d4", "#32877c", "#c2a7ed", "#d8b875"];
+  function renderBudgetPie(target, legendId, items, title) {
+    const safeItems = Array.isArray(items) ? items : [];
+    const total = safeItems.reduce((sum, item) => sum + Math.max(0, number(item.amount)), 0);
+    let offset = 0;
+    const circumference = 2 * Math.PI * 46;
+    const circles = safeItems.map((item, index) => {
+      const value = Math.max(0, number(item.amount));
+      const segment = total ? circumference * value / total : 0;
+      const markup = `<circle cx="60" cy="60" r="46" fill="none" stroke="${budgetColors[index % budgetColors.length]}" stroke-width="15" stroke-dasharray="${Math.max(0, segment - 1)} ${circumference}" stroke-dashoffset="${-offset}"/>`;
+      offset += segment;
+      return markup;
+    }).join("");
+    const desc = safeItems.map(item => `${item.label}: ${format(item.amount)} ريال، ${format(item.pct)}٪`).join("؛ ");
+    $(target).innerHTML = `<svg viewBox="0 0 120 120" role="img" aria-label="${esc(title)}. ${esc(desc || "لا توجد بيانات")}"><g transform="rotate(-90 60 60)">${circles}</g><text x="60" y="57" text-anchor="middle" class="chart-center">${format(total)}</text><text x="60" y="73" text-anchor="middle" class="chart-center-sub">ر.س</text></svg>`;
+    $(legendId).innerHTML = safeItems.map((item, index) => `<div class="legend-item"><i class="legend-dot" style="background:${budgetColors[index % budgetColors.length]}"></i><span>${esc(item.label)}<strong>${money(item.amount)} · ${format(item.pct)}٪</strong></span></div>`).join("");
+    $(legendId).insertAdjacentHTML("beforeend", `<table class="chart-data-table"><caption>${esc(title)} — البيانات</caption><thead><tr><th scope="col">البند</th><th scope="col">المبلغ</th><th scope="col">النسبة</th></tr></thead><tbody>${safeItems.map(item => `<tr><th scope="row">${esc(item.label)}</th><td>${money(item.amount)}</td><td>${format(item.pct)}٪</td></tr>`).join("")}</tbody></table>`);
+  }
+  function renderBudget(data) {
+    budgetCache = data;
+    renderBudgetPie("budget-actual-chart", "budget-actual-legend", data.actual || [], "التوزيع الفعلي للراتب");
+    renderBudgetPie("budget-target-chart", "budget-target-legend", data.target || [], "أهداف توزيع الراتب");
+    const targets = data.targets || {};
+    const form = $("budget-form");
+    ["essentials_pct","personal_pct","savings_pct"].forEach(key => { form.elements[key].value = Number(targets[key] ?? ({essentials_pct:70,personal_pct:20,savings_pct:10})[key]); });
+    $("budget-warnings").innerHTML = (data.warnings || []).map(item => `<p class="budget-warning" role="status">${esc(item.message || "")}</p>`).join("");
+  }
+  $("budget-form").addEventListener("input", () => {
+    const form = $("budget-form");
+    const sum = ["essentials_pct","personal_pct","savings_pct"].reduce((total, key) => total + Number(form.elements[key].value || 0), 0);
+    $("budget-total").textContent = `المجموع ${sum}٪`;
+    $("budget-total").classList.toggle("invalid", sum !== 100);
+  });
+  $("budget-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = Object.fromEntries(["essentials_pct","personal_pct","savings_pct"].map(key => [key, Number(form.elements[key].value)]));
+    if (Object.values(body).some(value => !Number.isInteger(value) || value < 0 || value > 100) || Object.values(body).reduce((sum, value) => sum + value, 0) !== 100) return toast("لازم تكون النسب أعدادًا صحيحة ومجموعها 100٪.", "error");
+    const button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      renderBudget(await api("/api/budget", { method: "PUT", body }));
+      await Promise.all([loadOverview(), loadExpenses()]);
+      toast("حفظنا أهداف توزيع راتبك.");
+    } catch (error) { showError(error); }
+    finally { button.disabled = false; }
+  });
+  async function renderSmartAccount(entitlements) {
+    const root = $("smart-account");
+    if (!entitlements.smart_account) {
+      root.innerHTML = `<div class="lock-card"><strong>الحساب الذكي ضمن باقات بلس وبريميوم</strong><p>شوف المتاح لك بالأشهر الجاية ومتى تقدر تشتري.</p><a class="button ghost full" href="#subscriptions">ترقية</a></div>`;
+      return;
+    }
+    try {
+      const data = await api("/api/smart-account");
+      const months = data.months || [];
+      const monthMarkup = months.map(item => `<article class="forecast-row"><div><strong>${esc(item.label)}</strong><span>${esc(dateOnly(item.date))}</span></div><strong>${money(item.available ?? item.safe_to_spend)}</strong></article>`).join("");
+      const wishes = (data.wishes || []).map(item => `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(item.name)}</div><div class="row-sub">${esc(item.when_label || "موعد الشراء غير متاح")}</div></div></div>`).join("");
+      root.innerHTML = `${monthMarkup || empty("ما فيه بيانات للأشهر الجاية", "بتظهر هنا بعد توفر البيانات.")}<h3 class="subsection-title">متى تقدر تشتري</h3>${wishes || empty("ما فيه أمنيات", "أضف منتج لقائمة الأمنيات عشان نتابع الوقت المناسب.")}<p class="footnote">${esc(data.assumption || "")}</p>`;
+    } catch (error) { root.innerHTML = `<div class="lock-card"><strong>ما قدرنا نحمل الحساب الذكي</strong><button type="button" class="button secondary full" data-retry-smart>حاول مرة ثانية</button></div>`; }
+  }
+  async function renderForecast(entitlements) {
+    const root = $("forecast");
+    if (!entitlements.forecast) {
+      root.innerHTML = `<div class="lock-card"><strong>التوقعات المالية ضمن باقة بريميوم</strong><p>محاكاة مالية لـ 12 شهر قدّام.</p><a class="button ghost full" href="#subscriptions">ترقية</a></div>`;
+      return;
+    }
+    try {
+      const data = await api("/api/forecast");
+      root.innerHTML = `${(data.months || []).map(item => `<article class="forecast-row"><div><strong>${esc(item.label)}</strong><span>${esc(dateOnly(item.date))}</span></div><div class="forecast-amounts"><span>الراتب ${money(item.salary)}</span><span>الالتزامات ${money(item.obligations)}</span><strong>المتاح ${money(item.available ?? item.safe_to_spend)}</strong></div></article>`).join("") || empty("ما فيه توقعات جاهزة", "بتظهر الأرقام بعد تحميل بياناتك.")}<p class="footnote">${esc(data.assumption || "")}</p>`;
+    } catch (_) { root.innerHTML = `<div class="lock-card"><strong>ما قدرنا نحمل التوقعات</strong><button type="button" class="button secondary full" data-retry-forecast>حاول مرة ثانية</button></div>`; }
+  }
   async function loadAccount() {
-    const account = await api("/api/account");
-    const subscription = account.subscription || {};
+    const [account, budget, subscriptions] = await Promise.all([api("/api/account"), api("/api/budget"), api("/api/subscriptions")]);
+    accountCache = account;
+    subscriptionCache = subscriptions;
+    renderBudget(budget);
+    const subscription = subscriptions.current || account.subscription || {};
+    const entitlements = account.entitlements || { smart_account: false, forecast: false };
     $("account-profile").innerHTML = `<article class="surface profile-card"><span class="eyebrow">معلومات حسابك</span><div class="profile-name">${esc(account.display_name || "حسابك")}</div>
       <div class="profile-line"><span>رقم الجوال</span><strong>${esc(account.phone_masked || "غير متوفر")}</strong></div>
       <div class="profile-line"><span>الإيميل</span><strong>${esc(account.email || "غير مضاف")}</strong></div>
@@ -547,14 +765,48 @@
       <div class="profile-line"><span>انتهاء الموافقة</span><strong>${esc(dateOnly(account.consent_expires_at))}</strong></div>
       <div class="profile-line"><span>يوم الراتب</span><strong>${account.salary_day ? `يوم ${format(account.salary_day)} من كل شهر` : "غير محدد"}</strong></div>
       <div class="profile-line"><span>نوع الحساب</span><strong>${account.demo_mode ? "بيانات تجريبية" : "حسابك"}</strong></div></article>`;
-    $("account-plan").innerHTML = `<article class="surface current-plan"><span class="eyebrow">باقتك الحالية</span><div class="plan-title">${esc(subscription.name || "—")}</div><p class="quiet">${subscription.price != null ? `${money(subscription.price)}${number(subscription.price) === 0 ? " · مجانية" : " شهريًا"}` : ""}</p><p class="quiet">أسئلة المساعد: ${subscription.assistant_questions == null ? "—" : format(subscription.assistant_questions)} بالشهر</p></article>`;
-    const tiers = Array.isArray(account.tiers) ? account.tiers : [];
-    $("tiers").innerHTML = tiers.length ? tiers.map(tier => `<div class="tier"><div class="tier-head"><strong>${esc(tier.name)}</strong><span class="tier-price">${tier.price == null ? "—" : number(tier.price) === 0 ? "مجانًا" : `${money(tier.price)} / شهر`}</span></div><ul>${(tier.features || []).map(feature => `<li>${esc(feature)}</li>`).join("")}</ul><button class="button ghost full" type="button" data-upgrade="${esc(tier.id)}">جرّب هالباقة</button></div>`).join("") : empty("ما قدرنا نعرض الباقات", "جرّب تحديث الصفحة بعد شوي.");
+    $("account-plan").innerHTML = `<article class="surface current-plan"><span class="eyebrow">باقتك الحالية</span><div class="plan-title">${esc(subscription.name || "—")}</div><p class="quiet">${subscription.price != null ? `${money(subscription.price)}${number(subscription.price) === 0 ? " · مجانية" : " شهريًا"}` : ""}</p><a class="button ghost full" href="#subscriptions">الباقات</a></article>`;
+    await Promise.all([renderSmartAccount(entitlements), renderForecast(entitlements)]);
+    renderSubscriptions(subscriptionCache);
     $("contact-channels").innerHTML = `<div class="contact-links">${account.contact?.email ? `<a class="contact-link" href="mailto:${esc(account.contact.email)}">راسلنا بالإيميل</a>` : `<div class="contact-unavailable">الإيميل مو متاح للحين.</div>`}${account.contact?.whatsapp ? `<a class="contact-link" href="${esc(safeWhatsApp(account.contact.whatsapp))}" target="_blank" rel="noopener noreferrer">تواصل معنا بواتساب</a>` : `<div class="contact-unavailable">واتساب مو متاح للحين.</div>`}</div>`;
     $("demo-tools").innerHTML = apiMode === "demo" && account.demo_mode ? `<article class="surface demo-control"><div class="section-heading"><div><span class="eyebrow">بيئة تجريبية</span><h2>أدوات العرض</h2></div></div><button class="button secondary full" id="btn-reset">ابدأ الديمو من جديد</button></article>` : "";
     const reset = $("btn-reset");
     if (reset) reset.addEventListener("click", resetDemo);
-    $("tiers").querySelectorAll("[data-upgrade]").forEach(button => button.addEventListener("click", () => toast("الباقات المدفوعة قريباً.")));
+  }
+  async function loadSubscriptions() {
+    subscriptionCache = await api("/api/subscriptions");
+    renderSubscriptions(subscriptionCache);
+  }
+  function renderSubscriptions(data) {
+    const tiers = Array.isArray(data?.tiers) ? data.tiers : [];
+    const current = data?.current || {};
+    const features = [
+      ["obligation_limit", "الالتزامات الشهرية", tier => tier.obligation_limit == null ? "بلا حد" : `${format(tier.obligation_limit)} التزامات`],
+      ["smart_account", "الحساب الذكي", tier => tier.smart_account ? "متاح" : "غير متاح"],
+      ["planner", "المخطط ومحاكاة الالتزامات", tier => tier.planner ? "متاح" : "غير متاح"],
+      ["forecast", "التوقعات المالية لـ 12 شهر", tier => tier.forecast ? "متاح" : "غير متاح"]
+    ];
+    $("subscription-comparison").innerHTML = tiers.length ? `<article class="surface comparison-card"><div class="comparison-current"><span class="eyebrow">باقتك الحالية</span><strong>${esc(current.name || "—")}</strong></div><div class="comparison-scroll"><table class="comparison-table"><thead><tr><th scope="col">الميزة</th>${tiers.map(tier => `<th scope="col">${esc(tier.name)}<small>${tier.price == null ? "" : number(tier.price) === 0 ? "مجانية" : `${money(tier.price)} / شهر`}</small></th>`).join("")}</tr></thead><tbody>${features.map(([key,label,display]) => `<tr><th scope="row">${label}</th>${tiers.map(tier => `<td>${esc(display(tier))}</td>`).join("")}</tr>`).join("")}${tiers.some(tier => Array.isArray(tier.features)) ? `<tr><th scope="row">تشمل</th>${tiers.map(tier => `<td>${(tier.features || []).map(feature => esc(feature)).join("، ") || "—"}</td>`).join("")}</tr>` : ""}</tbody></table></div>${data.demo_mode ? `<p class="quiet">وضع تجريبي — ما فيه أي عملية دفع.</p><div class="tier-switch">${tiers.map(tier => `<button type="button" class="button ${tier.id === current.id ? "primary" : "secondary"}" data-demo-plan="${esc(tier.id)}" ${tier.id === current.id ? 'aria-pressed="true"' : ""}>${esc(tier.name)}</button>`).join("")}</div><p class="quiet">تبديل الباقة (للديمو)</p>` : `<p class="quiet">الباقات المدفوعة قريباً.</p>`}</article>` : empty("ما قدرنا نعرض الباقات", "جرّب تحديث الصفحة بعد شوي.");
+    $("subscription-comparison").querySelectorAll("[data-demo-plan]").forEach(button => button.addEventListener("click", async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      const plan = button.dataset.demoPlan;
+      try {
+        const updated = await api("/api/demo/subscription", { method: "POST", body: { plan } });
+        subscriptionCache = updated;
+        renderSubscriptions(updated);
+        const account = await api("/api/account");
+        accountCache = account;
+        const entitlements = account.entitlements || {};
+        const currentPlan = updated.current || {};
+        $("account-plan").innerHTML = `<article class="surface current-plan"><span class="eyebrow">باقتك الحالية</span><div class="plan-title">${esc(currentPlan.name || "—")}</div><p class="quiet">${currentPlan.price != null ? `${money(currentPlan.price)}${number(currentPlan.price) === 0 ? " · مجانية" : " شهريًا"}` : ""}</p><a class="button ghost full" href="#subscriptions">الباقات</a></article>`;
+        await Promise.all([renderSmartAccount(entitlements), renderForecast(entitlements), refreshObligations()]);
+        toast("حدّثنا الباقة التجريبية.");
+      } catch (error) { showError(error); button.disabled = false; }
+    }));
+  }
+  async function refreshObligations() {
+    try { await loadObligations(); } catch (_) {}
   }
   function safeWhatsApp(value) {
     const source = String(value || "").trim();

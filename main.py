@@ -25,6 +25,8 @@ import service
 import actions
 import inputs
 import language
+import budget
+import subscriptions
 
 PRODUCTION_MODE = security.PRODUCTION_MODE
 DEMO_MODE = not PRODUCTION_MODE
@@ -90,6 +92,18 @@ class ConfirmIn(BaseModel):
 
 class PriceIn(BaseModel):
     price: float = Field(gt=0, le=1_000_000)
+
+class OfferIn(PriceIn):
+    target_months: Optional[int] = Field(default=None, ge=1, le=36, strict=True)
+
+class BudgetIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    essentials_pct: int = Field(ge=0, le=100, strict=True)
+    personal_pct: int = Field(ge=0, le=100, strict=True)
+    savings_pct: int = Field(ge=0, le=100, strict=True)
+
+class DemoSubscriptionIn(BaseModel):
+    plan: Literal["basic", "plus", "premium"]
 
 WishIn = inputs.WishIn
 
@@ -195,7 +209,7 @@ def revoke(user=Depends(current_user)):
 @app.get("/api/plans")
 def get_plans(user=Depends(current_user)):
     with db.tx() as con:
-        return {"plans": service.plans_view(con, user["id"])}
+        return service.visible_plans(con, user["id"])
 
 
 @app.post("/api/plans/{plan_id}/confirm")
@@ -204,7 +218,18 @@ def confirm(plan_id: str, body: ConfirmIn, user=Depends(current_user)):
         if not service.confirm_plan(con, user["id"], plan_id, body.amount, body.remaining):
             raise HTTPException(404, "الخطة غير موجودة.")
         db.audit(con, user["hash"], "plan.confirmed", {"plan": plan_id, "edited": body.amount is not None or body.remaining is not None})
-        return {"ok": True, "plans": service.plans_view(con, user["id"])}
+        return {"ok": True, **service.visible_plans(con, user["id"])}
+
+
+@app.post("/api/plans/{plan_id}/pay-all")
+def pay_all(plan_id: str, user=Depends(current_user)):
+    with db.tx() as con:
+        try:
+            result = service.pay_all(con, user["id"], plan_id)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        db.audit(con, user["hash"], "plan.settled", {"plan": plan_id, "already_paid": result["already_paid"]})
+        return result
 
 
 @app.get("/api/summary")
@@ -309,7 +334,7 @@ def post_plan(body: PlanIn, user=Depends(current_user)):
     with db.tx() as con:
         pid = service.add_plan(con, user["id"], **body.model_dump())
         db.audit(con, user["hash"], "plan.added", {"plan": pid})
-        return {"id": pid, "plans": service.plans_view(con, user["id"])}
+        return {"id": pid, **service.visible_plans(con, user["id"])}
 
 
 @app.delete("/api/plans/{plan_id}")
@@ -318,13 +343,58 @@ def delete_plan(plan_id: str, user=Depends(current_user)):
         if not service.delete_plan(con, user["id"], plan_id):
             raise HTTPException(404, "الالتزام مو موجود.")
         db.audit(con, user["hash"], "plan.deleted", {"plan": plan_id})
-        return {"plans": service.plans_view(con, user["id"])}
+        return service.visible_plans(con, user["id"])
 
 
 @app.post("/api/offers")
-def post_offers(body: PriceIn, user=Depends(current_user)):
+def post_offers(body: OfferIn, user=Depends(current_user)):
     with db.tx() as con:
-        return service.offer_comparison(con, user["id"], body.price)
+        return service.offer_comparison(con, user["id"], body.price, body.target_months)
+
+
+@app.get("/api/budget")
+def get_budget(user=Depends(current_user)):
+    with db.tx() as con:
+        return budget.view(con, user["id"], service.snapshot(con, user["id"]))
+
+
+@app.put("/api/budget")
+def put_budget(body: BudgetIn, user=Depends(current_user)):
+    values = body.model_dump()
+    if sum(values.values()) != 100:
+        raise HTTPException(422, "مجموع نسب توزيع راتبك لازم يكون 100%.")
+    with db.tx() as con:
+        budget.update(con, user["id"], values)
+        db.audit(con, user["hash"], "budget.updated")
+        return budget.view(con, user["id"], service.snapshot(con, user["id"]))
+
+
+@app.get("/api/subscriptions")
+def get_subscriptions(user=Depends(current_user)):
+    with db.tx() as con:
+        return subscriptions.response(con, user["id"], DEMO_MODE)
+
+
+@app.post("/api/demo/subscription")
+def demo_subscription(body: DemoSubscriptionIn, user=Depends(current_user)):
+    if not DEMO_MODE:
+        raise HTTPException(404, "المسار غير متاح.")
+    with db.tx() as con:
+        subscriptions.switch_demo(con, user["id"], body.plan)
+        db.audit(con, user["hash"], "demo.subscription", {"plan": body.plan})
+        return subscriptions.response(con, user["id"], True)
+
+
+@app.get("/api/smart-account")
+def get_smart_account(user=Depends(current_user)):
+    with db.tx() as con:
+        return service.smart_account(con, user["id"])
+
+
+@app.get("/api/forecast")
+def get_forecast(user=Depends(current_user)):
+    with db.tx() as con:
+        return service.financial_forecast(con, user["id"])
 
 
 @app.get("/api/account")

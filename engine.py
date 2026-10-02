@@ -64,6 +64,7 @@ class Profile:
     salary_day: int
     essentials: float          # 3-cycle average
     buffer: float = 500
+    savings_pct: float = 10
 
 
 @dataclass
@@ -77,7 +78,7 @@ class Snapshot:
 
 # ---------- core formula ----------
 def obligations(s: Snapshot, idx: int) -> float:
-    return sum(p.amount for p in s.plans if p.active_in(idx))
+    return sum(p.amount for p in s.plans if p.active_in(idx)) + s.extra.get("settlements", {}).get(idx, 0)
 
 
 def safe_to_spend(s: Snapshot, idx: int) -> float:
@@ -141,7 +142,7 @@ def earliest_start(s: Snapshot, method: str, price: float) -> Optional[int]:
 
 
 def saving_amount(s: Snapshot, k: int = 0) -> float:
-    return round(min(s.profile.salary * 0.10, max(0.0, available(s, k))), 2)
+    return round(min(s.profile.salary * s.profile.savings_pct / 100, max(0.0, available(s, k))), 2)
 
 
 def save_first(s: Snapshot, price: float, saved: float = 0) -> dict:
@@ -149,7 +150,7 @@ def save_first(s: Snapshot, price: float, saved: float = 0) -> dict:
     progress = []
     if saved >= price:
         return {"buyK": 0, "months": 0, "total": price, "saved": saved, "monthly": 0,
-                "salary_pct": 0, "max_monthly": round(s.profile.salary * .1, 2), "progress": []}
+                "salary_pct": 0, "max_monthly": round(s.profile.salary * s.profile.savings_pct / 100, 2), "progress": []}
     for k in range(SAVE_HORIZON + 1):
         amount = min(saving_amount(s, k), max(0, price - accumulated))
         accumulated += amount
@@ -164,7 +165,63 @@ def save_first(s: Snapshot, price: float, saved: float = 0) -> dict:
     return {"buyK": k if reached else None, "months": k if reached else None,
             "total": price, "saved": saved, "monthly": first,
             "salary_pct": round(first / s.profile.salary * 100, 2) if s.profile.salary else 0,
-            "max_monthly": round(s.profile.salary * .1, 2), "progress": progress}
+            "max_monthly": round(s.profile.salary * s.profile.savings_pct / 100, 2), "progress": progress}
+
+
+def saving_deadline(s: Snapshot, price: float, target_months: Optional[int] = None) -> dict:
+    result = save_first(s, price)
+    periods = (result["buyK"] + 1) if result["buyK"] is not None else None
+    maximum = round(sum(saving_amount(s, k) for k in range(target_months)), 2) if target_months else None
+    reachable = maximum >= price if maximum is not None else None
+    result.update(target_months=target_months, required_months=periods, max_target=maximum,
+                  reachable_in_target=reachable,
+                  warning=f"ما توصل لهدفك بهالمدة. تقدر تجمع {maximum:,.0f} ر.س." if reachable is False else None)
+    return result
+
+
+def budget_distribution(s: Snapshot, goal: dict, saved: float) -> dict:
+    salary = s.profile.salary
+    essential = obligations(s, s.current) + s.profile.essentials
+    actual = [("essentials", "الأساسيات", essential), ("personal", "شخصية", s.spent_now),
+              ("savings", "الادخار", saved), ("remaining", "متبقي", salary-essential-s.spent_now-saved)]
+    actual = [{"id": key, "label": label, "amount": round(amount, 2),
+               "pct": round(amount/salary*100) if salary else 0} for key, label, amount in actual]
+    target = [{"id": key, "label": label, "amount": round(salary*goal[key+"_pct"]/100, 2),
+               "pct": goal[key+"_pct"]} for key, label, _ in
+              [("essentials", "الأساسيات", 0), ("personal", "شخصية", 0), ("savings", "الادخار", 0)]]
+    warnings = []
+    if salary > 0 and essential > salary*goal["essentials_pct"]/100:
+        warnings.append({"type": "essentials_budget_exceeded", "message":
+            f"التزاماتك {actual[0]['pct']}% من راتبك، أعلى من هدفك {goal['essentials_pct']}%"})
+    personal_cap = salary*goal["personal_pct"]/100
+    if s.spent_now > personal_cap:
+        warnings.append({"type": "personal_budget_exceeded", "message":
+            f"صرفك الشخصي تعدّى {goal['personal_pct']}% من راتبك هالشهر", "target_pct": goal["personal_pct"]})
+    elif personal_cap > 0 and s.spent_now >= personal_cap*.8:
+        warnings.append({"type": "personal_budget_heads_up", "message":
+            f"انتبه، وصلت {round(s.spent_now/personal_cap*100)}% من حد صرفك الشخصي هالشهر.",
+                         "target_pct": goal["personal_pct"]})
+    return {"salary": salary, "actual": actual, "target": target, "warnings": warnings}
+
+
+def forecast(s: Snapshot, count: int = 12, first: int = 0) -> list[dict]:
+    return [{"k": k, "label": month_label(k), "date": cycle_start(s.current+k, s.profile.salary_day).isoformat(),
+             "salary": s.profile.salary, "obligations": obligations(s, s.current+k),
+             "essentials": s.profile.essentials, "buffer": s.profile.buffer,
+             "safe_to_spend": safe_to_spend(s, s.current+k), "available": available(s, k),
+             "saving_cap": saving_amount(s, k)} for k in range(first, first+count)]
+
+
+def pay_all_quote(s: Snapshot, plan: Plan) -> Optional[float]:
+    remaining = plan.remaining_from(s.current)
+    if remaining is None or remaining <= 0:
+        return None
+    # Current installment is already reserved by the monthly formula. For
+    # multi-payment plans quote the EXTRA needed beyond that reservation.
+    if remaining > 1:
+        return round((remaining-1)*plan.amount, 2)
+    current_paid = due_date_in_cycle(plan.day, s.current, s.profile.salary_day) < s.extra["today"]
+    return None if current_paid else plan.amount
 
 
 def compare(s: Snapshot, price: float) -> dict:

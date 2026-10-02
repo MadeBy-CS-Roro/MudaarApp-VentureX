@@ -9,6 +9,7 @@
   <link rel="manifest" href="/static/manifest.json">
   <link rel="icon" type="image/png" href="/static/icon-192.png">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem("mawid_appearance")||"system"}catch(_){document.documentElement.dataset.theme="system"}</script>
   <link rel="stylesheet" href="/static/app.css">
   <title>موعد — فلوسك أوضح</title>
 </head>
@@ -108,6 +109,7 @@
         </article>
         <div id="ob-list"></div>
         <div id="living-list"></div>
+        <article class="surface"><div class="section-heading"><div><span class="eyebrow">منتهية</span><h2>المدفوعات السابقة</h2></div></div><div id="ob-previous-payments"></div></article>
         <p class="footnote">الأساسيات متوسط آخر 3 شهور. الفواتير تظهر كعناصر، وهي محسوبة ضمن المتوسط أصلًا.</p>
       </section>
 
@@ -118,10 +120,11 @@
           <form id="planner-form" class="stack-form">
             <label>اسم المنتج<input id="buy-name" maxlength="60" placeholder="مثال: جوال"></label>
             <label>السعر، ر.س<input id="buy-price" type="number" min="1" step="0.01" inputmode="decimal" required placeholder="اكتب السعر"></label>
+            <label>بكم شهر تبي توصل للهدف؟<input id="buy-target-months" type="number" min="1" max="36" step="1" inputmode="numeric" value="3"></label>
           </form>
         </article>
         <div id="buy-scenarios" class="offer-stack" aria-live="polite"></div>
-        <button class="button primary full" id="btn-buy-wish" type="button" disabled>أضفه للأمنيات بالطريقة المختارة</button>
+        <div id="save-plan"></div>
         <p class="sample-note">عروض تجريبية للتوضيح. العروض الحقيقية تجي من الجهات بعد الشراكة.</p>
         <article class="surface explainer">
           <span class="eyebrow">كيف نحسبها؟</span>
@@ -134,8 +137,28 @@
         <div id="account-profile"></div>
         <div id="account-plan"></div>
         <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">وش يناسبك؟</span><h2>قارن الباقات</h2></div></div>
-          <div id="tiers"></div>
+          <div class="section-heading"><div><span class="eyebrow">على راحتك</span><h2>توزيع راتبك</h2></div></div>
+          <div class="budget-pies">
+            <section aria-labelledby="budget-actual-title"><h3 id="budget-actual-title">الفعلي هالشهر</h3><div id="budget-actual-chart" class="budget-chart"></div><div id="budget-actual-legend" class="legend"></div></section>
+            <section aria-labelledby="budget-target-title"><h3 id="budget-target-title">الهدف</h3><div id="budget-target-chart" class="budget-chart"></div><div id="budget-target-legend" class="legend"></div></section>
+          </div>
+          <div id="budget-warnings" aria-live="polite"></div>
+          <form id="budget-form" class="stack-form budget-form">
+            <p class="quiet">عدّل النسب على راحتك؛ لازم مجموعها يكون 100٪.</p>
+            <div class="form-row">
+              <label>الأساسيات ٪<input name="essentials_pct" type="number" min="0" max="100" step="1" required></label>
+              <label>شخصية ٪<input name="personal_pct" type="number" min="0" max="100" step="1" required></label>
+            </div>
+            <label>الادخار ٪<input name="savings_pct" type="number" min="0" max="100" step="1" required></label>
+            <p id="budget-total" class="budget-total" aria-live="polite">المجموع 100٪</p>
+            <button class="button secondary" type="submit">حفظ الأهداف</button>
+          </form>
+        </article>
+        <article class="surface"><div class="section-heading"><div><span class="eyebrow">نظرة لقدّام</span><h2>الحساب الذكي</h2></div></div><div id="smart-account"></div></article>
+        <article class="surface"><div class="section-heading"><div><span class="eyebrow">على مدى سنة</span><h2>التوقعات المالية</h2></div></div><div id="forecast"></div></article>
+        <article class="surface">
+          <div class="section-heading"><div><span class="eyebrow">مظهر موعد</span><h2>المظهر</h2></div></div>
+          <label class="theme-setting">اختيار المظهر<select id="theme-choice"><option value="light">فاتح</option><option value="dark">داكن</option><option value="system">حسب الجهاز</option></select></label>
         </article>
         <article class="surface">
           <div class="section-heading"><div><span class="eyebrow">بياناتك بأمان</span><h2>خصوصيتك</h2></div></div>
@@ -156,6 +179,11 @@
           <button class="button danger full" id="btn-revoke" type="button">إلغاء الموافقة وحذف بياناتي</button>
         </article>
         <div id="demo-tools"></div>
+      </section>
+
+      <section class="page" id="p-subscriptions" aria-labelledby="subscriptions-title">
+        <div class="page-intro"><span class="eyebrow">اختياراتك</span><h1 id="subscriptions-title">الاشتراكات</h1><p>اختر الأدوات اللي تناسب احتياجك. ما فيه دفع من هنا.</p></div>
+        <div id="subscription-comparison"></div>
       </section>
 
       <section class="page" id="p-wish" aria-labelledby="wish-title">

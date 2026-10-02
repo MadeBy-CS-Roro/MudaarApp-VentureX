@@ -108,6 +108,31 @@ CREATE TABLE IF NOT EXISTS chat_usage (
   questions INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, cycle)
 );
+CREATE TABLE IF NOT EXISTS user_preferences (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id),
+  essentials_pct INTEGER NOT NULL DEFAULT 70 CHECK(essentials_pct BETWEEN 0 AND 100),
+  personal_pct INTEGER NOT NULL DEFAULT 20 CHECK(personal_pct BETWEEN 0 AND 100),
+  savings_pct INTEGER NOT NULL DEFAULT 10 CHECK(savings_pct BETWEEN 0 AND 100),
+  plan TEXT NOT NULL DEFAULT 'basic' CHECK(plan IN ('basic','plus','premium')),
+  CHECK(essentials_pct+personal_pct+savings_pct=100)
+);
+CREATE TABLE IF NOT EXISTS savings_deposits (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  cycle INTEGER NOT NULL,
+  amount REAL NOT NULL CHECK(amount>0),
+  wish_id INTEGER REFERENCES wishlist(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS plan_settlements (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  plan_id TEXT NOT NULL,
+  cycle INTEGER NOT NULL,
+  amount REAL NOT NULL CHECK(amount>0),
+  reserved_amount REAL NOT NULL DEFAULT 0,
+  paid_at TEXT NOT NULL,
+  plan_name TEXT NOT NULL,
+  PRIMARY KEY(user_id,plan_id)
+);
 """
 
 
@@ -134,6 +159,12 @@ def init():
         columns = {r["name"] for r in con.execute("PRAGMA table_info(transactions)")}
         if "source" not in columns:
             con.execute("ALTER TABLE transactions ADD COLUMN source TEXT NOT NULL DEFAULT 'bank'")
+        if "reserved_amount" not in {r["name"] for r in con.execute("PRAGMA table_info(plan_settlements)")}:
+            con.execute("ALTER TABLE plan_settlements ADD COLUMN reserved_amount REAL NOT NULL DEFAULT 0")
+        # Only pre-existing demo users start Plus; production defaults Basic.
+        con.execute("INSERT OR IGNORE INTO user_preferences(user_id,plan) "
+                    "SELECT id,CASE WHEN EXISTS(SELECT 1 FROM demo_state WHERE user_id=users.id) "
+                    "THEN 'plus' ELSE 'basic' END FROM users")
 
 
 def audit(con, user_hash: str, action: str, detail: dict | None = None):

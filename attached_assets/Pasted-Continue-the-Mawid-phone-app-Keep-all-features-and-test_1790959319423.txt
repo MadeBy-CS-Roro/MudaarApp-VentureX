@@ -1,0 +1,40 @@
+Continue the Mawid phone app. Keep all features and tests passing.
+
+E. BUDGET SPLIT (in حسابي, section "توزيع راتبك")
+- Pie chart of ACTUAL distribution this month (الأساسيات = obligations + essentials; شخصية;
+  الادخار; متبقي) next to the TARGET split.
+- Default targets 70 / 20 / 10, editable (must total 100). PUT /api/budget, stored per user.
+- Noura: الأساسيات 7,600 = 87% → warning "التزاماتك 87% من راتبك، أعلى من هدفك 70%".
+- Personal spending over personal_pct × salary → warning on الرئيسية and المصروفات:
+  "صرفك الشخصي تعدّى {النسبة}% من راتبك هالشهر". Heads-up at 80%. Add to summary alerts.
+
+F. PLANNER
+- Show ONLY the recommended offer (badge "الأنسب لك" + a one-line reason).
+  "عرض العروض الثانية" expands the rest. The user can pick another offer.
+  Keep the "تجمع أول" card under it, same size.
+- Save first: input "بكم شهر تبي توصل للهدف؟" (N).
+  Monthly saving = min(savings_pct × salary, what's left that month).
+  Replace the hard-coded 0.10 in engine.py with the user's savings_pct.
+  If N is not enough: warning + two options: the minimum months needed, or the max target in N months.
+  Expected (Noura, 3,000, 10%): N=3 not reachable (max 1,920) → 5 months or target 1,920.
+- Buttons "أضف للأمنيات" on the selected offer and on the save plan.
+
+G. SUBSCRIPTIONS (separate page)
+- حسابي shows only "باقتك الحالية" + a "الباقات" button that opens the الاشتراكات page.
+- Limits enforced in the BACKEND (403 with an Arabic message) and shown in the UI:
+  الأساسية (مجانية): 5 التزامات، بدون الحساب الذكي، بدون محاكاة الالتزامات المحدثة
+  بلس (29 ر.س): 30 التزام، الحساب الذكي، محاكاة الالتزامات المحدثة
+  بريميوم (79 ر.س): بلا حد، الحساب الذكي، محاكاة التوقعات المالية للعميل
+- الحساب الذكي = future-month "تقدر تصرف" + "متى تقدر تشتري" (Basic still sees this month).
+  محاكاة الالتزامات المحدثة = المخطط. محاكاة التوقعات المالية = 12-month forecast section.
+- Over the limit: show the first N + "ترقّ عشان تشوف {الباقي} التزامات". Locked: lock card + "ترقية".
+- Comparison table: features as rows, plans as columns.
+- Demo: Noura is بلس. "تبديل الباقة (للديمو)" switches the plan with no payment.
+
+H. LIGHT / DARK MODE
+- حسابي → "المظهر": فاتح / داكن / حسب الجهاز, saved per device.
+  CSS variables for the WHOLE app. Check charts, badges, inputs, sheets, and the chat in dark mode.
+
+Expected: available 180 | التزاماتك الشهرية 7,600 | best offer تابي 4 دفعات from الشهر الجاي
+(150 in the tightest month) | pay-all تمارا 600 | تابي moves to المدفوعات السابقة after next month.
+Run all tests, then give me a phone checklist.
