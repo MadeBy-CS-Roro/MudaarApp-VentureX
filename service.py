@@ -18,7 +18,7 @@ DEFAULT_BUFFER = 500.0
 
 # ---------- loading ----------
 def _txs(con, user_id: int, until: date | None = None) -> list[dict]:
-    q = "SELECT date, amount, direction, merchant, description, category FROM transactions WHERE user_id=?"
+    q = "SELECT date, amount, direction, merchant, description, category FROM transactions WHERE user_id=? AND source='bank'"
     args = [user_id]
     if until:
         q += " AND date<=?"
@@ -49,9 +49,21 @@ def snapshot(con, user_id: int) -> E.Snapshot:
     cur = E.cycle_index(t, sal["day"])
     ov = overrides(con, user_id)
     essentials = detect.essentials_average(txs, sal["day"], cur, ov)
+    # Manual entries affect flexible spending only, never salary detection,
+    # bank classifications, or the historical essentials average.
+    manual = [
+        dict(r, date=date.fromisoformat(r["date"]), direction="debit")
+        for r in con.execute(
+            "SELECT date, amount, merchant, description, category FROM manual_expenses "
+            "WHERE user_id=? AND date<=? UNION ALL "
+            "SELECT date, amount, merchant, description, category FROM transactions "
+            "WHERE user_id=? AND date<=? AND source='manual' AND direction='debit'",
+            (user_id, t.isoformat(), user_id, t.isoformat())
+        )
+    ]
     spent = 0.0
     by_cat: dict[str, float] = {}
-    for x in txs:
+    for x in txs + manual:
         if x["direction"] == "debit" and E.cycle_index(x["date"], sal["day"]) == cur:
             cat = x["category"] or detect.categorize(x["merchant"], x["description"], ov) or "flexible:غير مصنف"
             if cat.startswith("flexible:"):
@@ -81,7 +93,7 @@ def connect_bank(con, user_hash: str, bank_id: str) -> dict:
     con.execute("INSERT OR IGNORE INTO users(user_hash, display_name) VALUES (?, ?)", (user_hash, "نورة"))
     user_id = con.execute("SELECT id FROM users WHERE user_hash=?", (user_hash,)).fetchone()["id"]
     # fresh start for the demo
-    for table in ("transactions", "plans", "wishlist", "demo_state", "category_overrides", "pending_actions", "chat_usage"):
+    for table in ("transactions", "manual_expenses", "plans", "wishlist", "demo_state", "category_overrides", "pending_actions", "chat_usage"):
         con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
     con.execute("UPDATE consents SET status='revoked' WHERE user_id=?", (user_id,))
 
@@ -112,7 +124,7 @@ def connect_bank(con, user_hash: str, bank_id: str) -> dict:
 
 def revoke(con, user_id: int):
     con.execute("UPDATE consents SET status='revoked' WHERE user_id=?", (user_id,))
-    for table in ("transactions", "plans", "demo_state", "wishlist", "category_overrides", "pending_actions", "chat_usage"):
+    for table in ("transactions", "manual_expenses", "plans", "demo_state", "wishlist", "category_overrides", "pending_actions", "chat_usage"):
         con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
 
 
@@ -178,6 +190,53 @@ def summary(con, user_id: int) -> dict:
         "alerts": alerts,
         "categories": {"essentials": s.extra["essentials_by_category"], "flexible": s.extra["flexible_by_category"]},
     }
+
+
+# ---------- expenses ----------
+def expenses(con, user_id: int) -> list[dict]:
+    """Read-only bank debits plus separately stored, deletable manual entries."""
+    rows = con.execute(
+        "SELECT CASE WHEN source='manual' THEN 'legacy:' ELSE 'bank:' END || id AS id, "
+        "date, amount, direction, merchant, description, category, source "
+        "FROM transactions WHERE user_id=? AND direction='debit' "
+        "UNION ALL SELECT id, date, amount, 'debit', merchant, description, category, "
+        "'manual' FROM manual_expenses WHERE user_id=? ORDER BY date DESC, id DESC",
+        (user_id, user_id),
+    )
+    return [dict(r, deletable=r["source"] == "manual") for r in rows]
+
+
+def add_expense(con, user_id: int, amount: float, merchant: str | None = None, category: str = "",
+                expense_date: date | None = None, description: str = "", name: str | None = None) -> dict:
+    # Preserve the phone app and confirmed assistant's name-based contract.
+    # Such records retain their explicit manual source, never bank evidence.
+    if name is not None:
+        add_legacy_expense(con, user_id, name, amount, category)
+        return {}
+    t = today(con, user_id)
+    expense_date = expense_date or t
+    if expense_date > t:
+        raise ValueError("تاريخ المصروف لا يمكن أن يكون بعد تاريخ اليوم في الحساب.")
+    item_id = "manual:" + str(uuid.uuid4())
+    con.execute(
+        "INSERT INTO manual_expenses(id,user_id,date,amount,merchant,description,category) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (item_id, user_id, expense_date.isoformat(), amount, merchant, description, category),
+    )
+    return {"id": item_id, "date": expense_date.isoformat(), "amount": amount,
+            "direction": "debit", "merchant": merchant, "description": description,
+            "category": category, "source": "manual", "deletable": True}
+
+
+def delete_expense(con, user_id: int, item_id: str) -> bool:
+    if item_id.startswith("legacy:"):
+        return con.execute(
+            "DELETE FROM transactions WHERE id=? AND user_id=? AND source='manual'",
+            (item_id[7:], user_id),
+        ).rowcount > 0
+    return con.execute(
+        "DELETE FROM manual_expenses WHERE id=? AND user_id=?", (item_id, user_id)
+    ).rowcount > 0
 
 
 # ---------- scenarios & wishlist ----------
@@ -251,41 +310,21 @@ def next_month(con, user_id: int) -> dict:
 
 
 # Ported selectively from the uploaded service, preserving current fixes.
-def expenses(con, user_id: int) -> dict:
+def expense_overview(con, user_id: int) -> dict:
     s = snapshot(con, user_id)
-    ov = overrides(con, user_id)
-    rows = con.execute(
-        "SELECT id,date,amount,merchant,description,category,source FROM transactions "
-        "WHERE user_id=? AND direction='debit' AND date<=? ORDER BY date DESC,id DESC",
-        (user_id, s.extra["today"].isoformat())).fetchall()
-    items, by_cat = [], {}
-    for r in rows:
-        if E.cycle_index(date.fromisoformat(r["date"]), s.profile.salary_day) != s.current:
-            continue
-        cat = r["category"] or detect.categorize(r["merchant"], r["description"], ov) or "flexible:غير مصنف"
-        if not (cat.startswith("essential:") or cat.startswith("flexible:")):
-            continue
-        group, name = cat.split(":", 1)
-        items.append({"id": r["id"], "date": r["date"], "name": r["merchant"], "amount": r["amount"],
-                      "category": name, "group": group, "source": r["source"]})
-        entry = by_cat.setdefault(name, {"name": name, "group": group, "count": 0, "total": 0})
-        entry["count"] += 1
-        entry["total"] += r["amount"]
-    total = sum(i["amount"] for i in items)
-    return {"items": items, "total": total, "count": len(items),
-            "average": round(total / len(items), 2) if items else 0,
-            "flexible_total": s.spent_now, "by_category": sorted(by_cat.values(), key=lambda c: -c["total"])}
+    items = expenses(con, user_id)
+    current_items = [r for r in items if date.fromisoformat(r["date"]) <= s.extra["today"]
+                     and E.cycle_index(date.fromisoformat(r["date"]), s.profile.salary_day) == s.current]
+    total = sum(i["amount"] for i in current_items)
+    return {"items": items, "total": total, "count": len(current_items),
+            "average": round(total / len(current_items), 2) if current_items else 0,
+            "flexible_total": s.spent_now}
 
 
-def add_expense(con, user_id: int, name: str, amount: float, category: str) -> None:
+def add_legacy_expense(con, user_id: int, name: str, amount: float, category: str) -> None:
     con.execute("INSERT INTO transactions(user_id,date,amount,direction,merchant,description,category,source) "
                 "VALUES (?,?,?,?,?,?,?,'manual')",
                 (user_id, today(con, user_id).isoformat(), amount, "debit", name, "MANUAL", category))
-
-
-def delete_expense(con, user_id: int, tx_id: int) -> bool:
-    return con.execute("DELETE FROM transactions WHERE id=? AND user_id=? AND source='manual'",
-                       (tx_id, user_id)).rowcount > 0
 
 
 def add_plan(con, user_id: int, name: str, amount: float, day: int, remaining: int | None, kind: str) -> str:

@@ -55,17 +55,20 @@
         <article class="surface">
           <div class="section-heading"><div><span class="eyebrow">أضف من جيبك</span><h2>مصروف جديد</h2></div></div>
           <form id="expense-form" class="stack-form">
-            <label>وش اشتريت؟<input name="name" required maxlength="60" autocomplete="off" placeholder="مثال: قهوة"></label>
+            <label>وش اشتريت؟<input name="name" required maxlength="80" autocomplete="off" placeholder="مثال: قهوة"></label>
             <div class="form-row">
-              <label>المبلغ، ر.س<input name="amount" required inputmode="decimal" type="number" min="0.01" step="0.01" placeholder="0"></label>
-              <label>الفئة<select name="category" required><option value="flexible:مطاعم">مطاعم</option><option value="flexible:توصيل">توصيل</option><option value="flexible:تسوق">تسوق</option><option value="flexible:ترفيه">ترفيه</option><option value="flexible:قهوة">قهوة</option><option value="flexible:أخرى">أخرى</option><option value="essential:بقالة">بقالة</option><option value="essential:بنزين">بنزين</option><option value="essential:فواتير">فواتير</option></select></label>
+              <label>المبلغ، ر.س<input name="amount" required inputmode="decimal" type="number" min="0.01" max="1000000" step="0.01" placeholder="0"></label>
+              <label>الفئة<select name="category" required><option value="flexible:مطاعم">مطاعم</option><option value="flexible:توصيل">توصيل</option><option value="flexible:تسوق">تسوق</option><option value="flexible:ترفيه">ترفيه</option><option value="flexible:أخرى">أخرى</option></select></label>
             </div>
+            <label>تاريخ المصروف<input name="date" type="date" required></label>
+            <label>وصف إضافي، اختياري<textarea name="description" maxlength="200"></textarea></label>
+            <p class="quiet">سجّل بس المصروف اللي مو موجود بالبنك عشان ما ينحسب مرتين. تاريخ العملية يحدد دورة الراتب اللي ينحسب فيها.</p>
             <button class="button primary" type="submit">أضف المصروف</button>
           </form>
         </article>
         <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">المسجل عندك</span><h2>آخر المصروفات</h2></div></div>
-          <div id="expense-list"></div>
+          <div class="section-heading"><div><span class="eyebrow">المسجل عندك</span><h2>سجل المصروفات</h2></div><button class="button secondary" id="expense-refresh" type="button">تحديث</button></div>
+          <div id="expense-list" aria-live="polite"></div>
         </article>
         <article class="surface">
           <div class="section-heading"><div><span class="eyebrow">تصنيف تلقائي</span><h2>عدّل تصنيف متجر</h2></div></div>

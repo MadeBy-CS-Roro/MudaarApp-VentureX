@@ -31,6 +31,9 @@ FastAPI + SQLite. The engine does all the math. The assistant only explains tool
 | GET | `/api/plans` | | plans with `remaining`, `action` |
 | POST | `/api/plans/{id}/confirm` | `{amount?, remaining?}` | updated plans |
 | GET | `/api/summary` | | `available, safe_to_spend, spent, formula, plans[], alerts[], categories` |
+| GET | `/api/expenses` | | `{items}`: bank debits and manual expenses, newest first, with `source` and `deletable` |
+| POST | `/api/expenses` | `{amount, merchant, category, date?, description?}` | `{expense}` (201): saves a manual flexible expense |
+| DELETE | `/api/expenses/{id}` | | `{ok}`: removes an owned manual expense; bank/missing/other-user IDs return 404 |
 | POST | `/api/scenarios` | `{price}` | `cash, bnpl4, fin12` (monthly, total, tight, tightK, ok, earliest) + `save` (buyK) |
 | GET / POST | `/api/wishlist` | `{name, price, method}` | items with `status.ok`, `when_label` |
 | POST | `/api/categories` | `{merchant, category}` | user fixes a category once |
@@ -40,6 +43,18 @@ FastAPI + SQLite. The engine does all the math. The assistant only explains tool
 
 `tightK`, `earliest`, `buyK`: months from now (0 = this month, 1 = next month).
 Demo auth: send `Authorization: Bearer <token>` from `/api/consent`; with demo mode enabled (default), the token is optional.
+
+Manual expenses use the same user authentication as the other API routes. Amounts must
+be positive, at most 1,000,000 SAR, and have at most two decimal places. Categories
+are `flexible:مطاعم`, `flexible:توصيل`, `flexible:تسوق`, `flexible:ترفيه`, or
+`flexible:أخرى`. The merchant is required (up to 80 characters); descriptions are
+optional (up to 200). Dates default to the account's current date, including the
+simulated demo date, and cannot be in its future. Older expenses remain in history
+but only the current salary cycle affects `spent`, `available`, and flexible totals.
+Manual entries are stored separately from bank transactions: they never influence
+bank-derived salary detection, historical essentials averages, or merchant overrides.
+Avoid entering a bank-recorded expense again. Demo reset and consent revocation clear
+manual expenses along with bank transactions for that user.
 
 ## SQLite backups and recovery
 

@@ -1,6 +1,6 @@
 """Request validation shared by HTTP forms and confirmed assistant writes."""
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Input(BaseModel):
@@ -11,6 +11,13 @@ class ExpenseIn(Input):
     name: str = Field(min_length=1, max_length=60)
     amount: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
     category: str = Field(pattern=r"^(essential|flexible):.{1,30}$")
+
+    @field_validator("amount")
+    @classmethod
+    def whole_cents(cls, value):
+        if round(value, 2) != value:
+            raise ValueError("المبلغ بحد أقصى منزلتين عشريتين.")
+        return value
 
 
 class PlanIn(Input):

@@ -12,6 +12,8 @@
   let apiMode = "unknown", started = false, language = null, selectedBank = null;
   let obligationsCache = null, plannerResult = null, chosenMethod = null, wishlistCount = 0, salaryAmount = 0;
   let obTab = "all", planBusy = false, expenseBusy = false, chatBusy = false, offerTimer;
+  let expenseToday = "";
+  const deletingExpenses = new Set();
   const PAGES = ["overview", "expenses", "obligations", "buy", "account", "wish"];
   const METHOD_LABELS = { cash: "كاش", save: "تجمع أول", fin12: "تمويل 12 شهر" };
   const METHOD_IDS = ["save", "cash", "bnpl3", "bnpl4", "bnpl6", "fin12"];
@@ -184,30 +186,50 @@
   }
 
   async function loadExpenses() {
-    const data = await api("/api/expenses");
-    const flexibleTotal = number(data.flexible_total ?? data.total);
-    $("ex-summary").innerHTML = stat("مصروفاتك المرنة", money(flexibleTotal), "purple", `عدد العمليات ${format(data.count)}`) + stat("متوسط الصرف", money(data.average), "teal", "من بيانات حسابك");
+    $("expense-list").innerHTML = `<p class="quiet">نحمّل مصروفاتك…</p>`;
+    let data, summary;
+    try {
+      [data, summary] = await Promise.all([api("/api/expenses"), api("/api/summary")]);
+    } catch (error) {
+      $("expense-list").innerHTML = `<p class="quiet" role="alert">ما قدرنا نحمل المصروفات. اضغط تحديث وحاول مرة ثانية.</p>`;
+      $("ex-summary").innerHTML = "";
+      throw error;
+    }
+    $("ex-summary").innerHTML = stat("مصروفاتك المرنة", money(summary.spent), "purple", "من دورة الراتب الحالية") +
+      stat("المتاح قبل الراتب", money(summary.available), summary.available < 0 ? "rose" : "teal", "بعد الالتزامات وهامش الأمان") +
+      stat("متوسط الأساسيات", money(summary.formula.essentials), "sand", "متوسط آخر 3 شهور، مو صرف هالدورة");
+    const categories = Object.entries(summary.categories?.flexible || {}).map(([name, value]) =>
+      `<div class="list-row"><span>${esc(name)}</span><strong>${money(value)}</strong></div>`).join("");
+    $("ex-summary").innerHTML += `<div class="surface" style="grid-column:1/-1"><h2>المرن حسب الفئة</h2>${categories || '<p class="quiet">ما فيه مصروفات مرنة بهالدورة.</p>'}</div>`;
+    expenseToday = summary.today;
+    const dateInput = $("expense-form").elements.date;
+    dateInput.max = expenseToday;
+    if (!dateInput.value) dateInput.value = expenseToday;
     const items = Array.isArray(data.items) ? data.items : [];
     $("expense-list").innerHTML = items.length ? items.map(item => {
-      const manual = item.source === "manual";
-      return `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(item.name)}</div><div class="row-sub">${esc(item.date || "")} · ${esc(item.category || item.group || "")}${manual ? " · يدوي" : ""}</div></div><div class="row-amount">${money(item.amount)}${manual ? `<div><button class="danger-action" type="button" data-expense-delete="${esc(item.id)}">حذف</button></div>` : ""}</div></div>`;
-    }).join("") : empty("ما فيه مصروفات هالشهر للحين", "تقدر تضيف مصروفك اليدوي من النموذج فوق.");
+      const manual = item.source === "manual" && item.deletable === true;
+      return `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(item.merchant)}</div><div class="row-sub">${esc(item.date || "")} · ${esc(item.category || "غير مصنف")} · ${manual ? "يدوي" : "من البنك، للقراءة بس"}</div>${item.description ? `<div class="row-sub">${esc(item.description)}</div>` : ""}</div><div class="row-amount">${money(item.amount)}${manual ? `<div><button class="danger-action" type="button" data-expense-delete="${esc(item.id)}">حذف</button></div>` : ""}</div></div>`;
+    }).join("") : empty("ما فيه مصروفات مسجلة للحين", "تقدر تضيف مصروفك اليدوي من النموذج فوق.");
     $("wish-count").textContent = $("wish-count").textContent || "0";
   }
   async function createExpense(form) {
     const fd = new FormData(form);
     const name = String(fd.get("name") || "").trim();
-    const amount = toNum(fd.get("amount"));
+    const amountText = String(fd.get("amount") || "").trim();
+    const amount = Number(amountText);
     const category = String(fd.get("category") || "");
-    if (!name || !Number.isFinite(amount) || amount <= 0) return toast("اكتب بيانات المصروف صح.", "error");
+    const date = String(fd.get("date") || "");
+    const description = String(fd.get("description") || "").trim();
+    if (!name || !/^\d+(?:\.\d{1,2})?$/.test(amountText) || !Number.isFinite(amount) || amount <= 0 || amount > 1000000 || !expenseToday || !date || date > expenseToday) return toast("تأكد من المبلغ والتاريخ. المبلغ بحد أقصى منزلتين عشريتين، والتاريخ مو بعد اليوم بحسابك.", "error");
     const submit = form.querySelector('button[type="submit"]');
     if (expenseBusy) return;
     expenseBusy = true;
     if (submit) submit.disabled = true;
     try {
-      await api("/api/expenses", { method: "POST", body: { name, amount, category } });
+      await api("/api/expenses", { method: "POST", body: { merchant: name, amount, category, date, description } });
       toast("أضفنا المصروف.");
       form.reset();
+      form.elements.date.value = expenseToday;
       await Promise.all([loadExpenses(), loadOverview()]);
       return true;
     } catch (error) { showError(error); return false; }
@@ -215,11 +237,13 @@
   }
   $("expense-list").addEventListener("click", async event => {
     const remove = event.target.closest("[data-expense-delete]");
-    if (remove) {
+    if (remove && !deletingExpenses.has(remove.dataset.expenseDelete)) {
       if (!window.confirm("تحذف هالمصروف؟")) return;
       remove.disabled = true;
-      try { await api(`/api/expenses/${encodeURIComponent(remove.dataset.expenseDelete)}`, { method: "DELETE" }); await Promise.all([loadExpenses(), loadOverview()]); toast("حذفنا المصروف."); }
-      catch (error) { showError(error); remove.disabled = false; }
+      deletingExpenses.add(remove.dataset.expenseDelete);
+      try { await api(`/api/expenses/${encodeURIComponent(remove.dataset.expenseDelete)}`, { method: "DELETE" }); toast("حذفنا المصروف."); await Promise.all([loadExpenses(), loadOverview()]); }
+      catch (error) { showError(error); }
+      finally { deletingExpenses.delete(remove.dataset.expenseDelete); remove.disabled = false; }
       return;
     }
   });
@@ -228,6 +252,7 @@
     event.preventDefault();
     createExpense(form);
   });
+  $("expense-refresh").addEventListener("click", () => loadExpenses().catch(showError));
   $("category-form").addEventListener("submit", async event => {
     event.preventDefault();
     const form = event.currentTarget, submit = form.querySelector("button");

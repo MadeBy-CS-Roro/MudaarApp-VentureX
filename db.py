@@ -34,6 +34,19 @@ CREATE TABLE IF NOT EXISTS transactions (
   source TEXT NOT NULL DEFAULT 'bank'
 );
 CREATE INDEX IF NOT EXISTS ix_tx_user_date ON transactions(user_id, date);
+CREATE TABLE IF NOT EXISTS manual_expenses (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  date TEXT NOT NULL,
+  amount REAL NOT NULL CHECK(amount > 0 AND amount <= 1000000),
+  merchant TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL CHECK(category IN (
+    'flexible:مطاعم', 'flexible:توصيل', 'flexible:تسوق',
+    'flexible:ترفيه', 'flexible:أخرى'
+  ))
+);
+CREATE INDEX IF NOT EXISTS ix_manual_user_date ON manual_expenses(user_id, date);
 CREATE TABLE IF NOT EXISTS plans (
   id TEXT NOT NULL,
   user_id INTEGER NOT NULL REFERENCES users(id),

@@ -124,7 +124,10 @@ def test_summary_numbers(client):
     assert before["amount"] == 600 and before["plans"][0]["name"] == "تمارا"
     assert any(a["type"] == "plan_ending" and a["name"] == "تابي" for a in s["alerts"])
 
-
+def _expense_payload(client, **changes):
+    payload = {"amount": 35.75, "merchant": "مقهى", "category": "flexible:مطاعم",
+               "date": client.get("/api/summary").json()["today"]}
+    return {**payload, **changes}
 def test_scenarios(client):
     r = client.post("/api/scenarios", json={"price": 3000}).json()
     assert r["bnpl4"]["tight"] == -570 and r["bnpl4"]["earliest"] == 1
@@ -384,3 +387,196 @@ def test_frontend_assets_and_api_docs(client):
         assert response.status_code == 200
         assert response.headers["content-type"] == "image/png"
     assert client.get("/docs").status_code == 200
+
+def test_expense_audit_contains_no_raw_financial_details(client):
+    item = client.post("/api/expenses", json=_expense_payload(client)).json()["expense"]
+    assert client.delete(f"/api/expenses/{item['id']}").status_code == 200
+    with main.db.tx() as con:
+        rows = con.execute(
+            "SELECT action, detail FROM audit_log WHERE action LIKE 'expense.%' ORDER BY id"
+        ).fetchall()
+    assert [r["action"] for r in rows] == ["expense.added", "expense.deleted"]
+    assert all(json.loads(r["detail"]) == {} for r in rows)
+
+def test_expense_schema_upgrade_preserves_existing_bank_records(client):
+    before = client.get("/api/summary").json()
+    bank_rows = client.get("/api/expenses").json()["items"]
+    with main.db.tx() as con:
+        con.execute("DROP TABLE manual_expenses")
+    main.db.init()
+    main.db.init()
+    assert client.get("/api/summary").json() == before
+    assert client.get("/api/expenses").json()["items"] == bank_rows
+    assert client.post("/api/expenses", json=_expense_payload(client)).status_code == 201
+
+def test_expenses_use_salary_cycles_not_calendar_months(client):
+    from datetime import date, timedelta
+    import engine
+    before = client.get("/api/summary").json()
+    current = engine.cycle_index(date.fromisoformat(before["today"]), before["salary"]["day"])
+    start = engine.cycle_start(current, before["salary"]["day"])
+    old = client.post("/api/expenses", json=_expense_payload(
+        client, date=(start - timedelta(days=1)).isoformat(), merchant="GROCERY",
+        amount=100, description="SALARY PAYROLL",
+    ))
+    assert old.status_code == 201
+    # Historical manual entries must not enter bank-based essentials or salary detection.
+    assert client.get("/api/summary").json() == before
+    assert old.json()["expense"] in client.get("/api/expenses").json()["items"]
+    first_day = client.post("/api/expenses", json=_expense_payload(client, date=start.isoformat(), amount=20))
+    assert first_day.status_code == 201
+    assert client.get("/api/summary").json()["spent"] == before["spent"] + 20
+    client.post("/api/demo/next-month")
+    assert client.get("/api/summary").json()["spent"] == 0
+    assert first_day.json()["expense"] in client.get("/api/expenses").json()["items"]
+
+def test_expense_merge_keeps_legacy_entries_out_of_bank_calibration(client):
+    before = client.get("/api/summary").json()
+    with main.db.tx() as con:
+        user_id = con.execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
+        con.execute(
+            "INSERT INTO transactions(user_id,date,amount,direction,merchant,description,category,source) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (user_id, "2026-08-01", 999, "debit", "PANDA", "MANUAL",
+             "essential:بقالة", "manual"),
+        )
+    assert client.get("/api/summary").json() == before
+    legacy = next(r for r in client.get("/api/expenses").json()["items"]
+                  if r["source"] == "manual")
+    assert legacy["id"].startswith("legacy:") and legacy["deletable"]
+    assert client.delete(f"/api/expenses/{legacy['id']}").status_code == 200
+    assert client.get("/api/summary").json() == before
+
+
+def test_expense_merge_registers_one_route_per_operation(client):
+    for method in ("GET", "POST", "DELETE"):
+        routes = [r for r in main.app.routes if getattr(r, "path", "").startswith("/api/expenses")
+                  and method in getattr(r, "methods", set())]
+        assert len(routes) == 1
+    response = client.post("/api/expenses", json={
+        "name": "قهوة", "amount": 20.001, "category": "flexible:قهوة",
+    })
+    assert response.status_code == 422
+
+
+def test_expense_endpoints_preserve_production_auth(client, monkeypatch):
+    monkeypatch.setattr(main, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(main, "DEMO_MODE", False)
+    payload = {"amount": 10, "merchant": "مقهى", "category": "flexible:مطاعم"}
+    for method, path, kwargs in [
+        ("get", "/api/expenses", {}),
+        ("post", "/api/expenses", {"json": payload}),
+        ("delete", "/api/expenses/manual:missing", {}),
+    ]:
+        assert getattr(client, method)(path, **kwargs).status_code == 401
+        assert getattr(client, method)(path, headers={"Authorization": "Bearer forged.token"}, **kwargs).status_code == 401
+        demo_token = main.security.sign_token({"sub": main.security.hash_id(main.DEMO_USER), "mode": "demo"})
+        assert getattr(client, method)(path, headers={"Authorization": f"Bearer {demo_token}"}, **kwargs).status_code == 401
+    user_hash = main.security.hash_id("production-expense-user")
+    with main.db.tx() as con:
+        con.execute("INSERT INTO users(user_hash) VALUES (?)", (user_hash,))
+    headers = {"Authorization": "Bearer " + main.security.sign_token({"sub": user_hash, "mode": "production"})}
+    response = client.post("/api/expenses", json=payload, headers=headers)
+    assert response.status_code == 201
+    item = response.json()["expense"]
+    assert client.get("/api/expenses", headers=headers).json()["items"] == [item]
+    assert client.delete(f"/api/expenses/{item['id']}", headers=headers).status_code == 200
+
+def test_bank_transactions_are_read_only(client):
+    before = client.get("/api/summary").json()
+    bank_rows = client.get("/api/expenses").json()["items"]
+    assert client.delete(f"/api/expenses/{bank_rows[0]['id']}").status_code == 404
+    # Even a caller passing a bank's bare numeric ID cannot delete it.
+    assert client.delete(f"/api/expenses/{bank_rows[0]['id'].split(':')[1]}").status_code == 404
+    assert client.get("/api/expenses").json()["items"] == bank_rows
+    assert client.get("/api/summary").json() == before
+
+def test_expenses_are_isolated_between_users(client):
+    item = client.post("/api/expenses", json=_expense_payload(client)).json()["expense"]
+    owner_before = client.get("/api/summary").json()
+    user_hash = main.security.hash_id("other-expense-user")
+    with main.db.tx() as con:
+        main.service.connect_bank(con, user_hash, "demo1")
+    headers = {"Authorization": "Bearer " + main.security.sign_token({"sub": user_hash, "mode": "demo"})}
+    other_before = client.get("/api/summary", headers=headers).json()
+    other_rows = client.get("/api/expenses", headers=headers).json()["items"]
+    assert item not in other_rows
+    assert client.delete(f"/api/expenses/{item['id']}", headers=headers).status_code == 404
+    assert client.get("/api/summary", headers=headers).json() == other_before
+    other_item = client.post("/api/expenses", headers=headers, json=_expense_payload(client)).json()["expense"]
+    assert other_item["id"] != item["id"]
+    assert client.get("/api/summary").json() == owner_before
+    assert other_item not in client.get("/api/expenses").json()["items"]
+    assert client.delete(f"/api/expenses/{other_item['id']}").status_code == 404
+    assert client.delete(f"/api/expenses/{other_item['id']}", headers=headers).status_code == 200
+    assert client.get("/api/summary", headers=headers).json() == other_before
+
+def test_category_correction_does_not_reclassify_manual_expenses(client):
+    item = client.post("/api/expenses", json=_expense_payload(client, merchant="GROCERY")).json()["expense"]
+    client.post("/api/categories", json={"merchant": "GROCERY", "category": "essential:بقالة"})
+    assert next(r for r in client.get("/api/expenses").json()["items"] if r["id"] == item["id"]) == item
+    assert client.get("/api/summary").json()["spent"] == pytest.approx(455.75)
+
+def test_demo_reset_and_revocation_clear_manual_expenses(client):
+    client.post("/api/expenses", json=_expense_payload(client))
+    assert client.post("/api/demo/reset").status_code == 200
+    assert all(r["source"] == "bank" for r in client.get("/api/expenses").json()["items"])
+    client.post("/api/expenses", json=_expense_payload(client))
+    assert client.delete("/api/consent").status_code == 200
+    assert client.get("/api/expenses").json()["items"] == []
+
+@pytest.mark.parametrize("amount", [0.01, 1_000_000])
+def test_expense_amount_boundaries_and_default_account_date(client, amount):
+    before = client.get("/api/summary").json()
+    response = client.post("/api/expenses", json={
+        "amount": amount, "merchant": "مطعم", "category": "flexible:أخرى",
+    })
+    assert response.status_code == 201
+    assert response.json()["expense"]["date"] == before["today"]
+    after = client.get("/api/summary").json()
+    assert after["spent"] == pytest.approx(before["spent"] + amount)
+    assert after["available"] == pytest.approx(before["available"] - amount)
+
+@pytest.mark.parametrize("changes", [
+    {"amount": 0}, {"amount": -1}, {"amount": 1_000_000.01}, {"amount": 1.001},
+    {"amount": "NaN"}, {"amount": "Infinity"}, {"amount": "-Infinity"}, {"amount": None},
+    {"merchant": ""}, {"merchant": " \t "}, {"merchant": "a" * 81},
+    {"description": "a" * 201}, {"category": "essential:بقالة"},
+    {"category": "flexible:unknown"}, {"category": "income"}, {"category": ""},
+    {"date": "invalid"}, {"date": "2026-02-30"}, {"date": "9999-12-31"},
+    {"user_id": 999}, {"direction": "credit"}, {"source": "bank"},
+])
+def test_invalid_expenses_are_rejected_without_side_effects(client, changes):
+    before = client.get("/api/summary").json()
+    rows = client.get("/api/expenses").json()["items"]
+    assert client.post("/api/expenses", json=_expense_payload(client, **changes)).status_code == 422
+    assert client.get("/api/expenses").json()["items"] == rows
+    assert client.get("/api/summary").json() == before
+
+def test_manual_expense_updates_balance_categories_and_can_be_deleted(client):
+    before = client.get("/api/summary").json()
+    bank_rows = client.get("/api/expenses").json()["items"]
+    assert bank_rows and all(r["source"] == "bank" and not r["deletable"] for r in bank_rows)
+    response = client.post("/api/expenses", json=_expense_payload(client, merchant="  مقهى  "))
+    assert response.status_code == 201
+    item = response.json()["expense"]
+    assert item["merchant"] == "مقهى"
+    assert item["source"] == "manual" and item["deletable"]
+    after = client.get("/api/summary").json()
+    assert after["spent"] == pytest.approx(before["spent"] + 35.75)
+    assert after["available"] == pytest.approx(before["available"] - 35.75)
+    assert after["categories"]["flexible"]["مطاعم"] == pytest.approx(
+        before["categories"]["flexible"].get("مطاعم", 0) + 35.75)
+    assert after["formula"] == before["formula"]
+    assert after["salary"] == before["salary"]
+    assert after["categories"]["essentials"] == before["categories"]["essentials"]
+    rows = client.get("/api/expenses").json()["items"]
+    assert next(r for r in rows if r["id"] == item["id"]) == item
+    assert [r for r in rows if r["source"] == "bank"] == bank_rows
+    assert [r["date"] for r in rows] == sorted((r["date"] for r in rows), reverse=True)
+
+    assert client.delete(f"/api/expenses/{item['id']}").status_code == 200
+    assert client.get("/api/summary").json() == before
+    assert client.get("/api/expenses").json()["items"] == bank_rows
+    assert client.delete(f"/api/expenses/{item['id']}").status_code == 404
+    assert client.delete("/api/expenses/missing").status_code == 404

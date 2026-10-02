@@ -35,9 +35,11 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 Open the preview and use the demo bank onboarding when prompted. You can also call `POST /api/consent` with `{"bank_id":"demo1"}` to initialize demo data, then try `/api/summary`, `/api/plans`, `/api/scenarios`, and `/api/chat` in the docs.
 Consent creation and `/api/demo/reset` reset the demo data. No live bank connection is configured.
 
+
 ## Phone app scope
 
 Backend updates are approved. Port uploaded features selectively while preserving current security, production safeguards, backups, and wishlist fixes. Do not replace the backend wholesale.
+Manual flexible expense entry, dated history, and manual-only deletion use `/api/expenses`; bank-derived transactions remain read-only in that history.
 All screens are Arabic RTL, purple/teal, phone-first (390px); desktop keeps a centered frame no wider than 430px. Preserve provider demo data and the safe-to-spend formula. Store only the session token in localStorage. Assistant writes require explicit, expiring, one-time confirmation.
 Use consistent casual Saudi Arabic, address the user in masculine singular, and greet with "هلا نورة". Use هالشهر، الشهر الجاي، الحين، شهور، ر.س. Shared number agreement comes from the language API.
 The basic plan includes five assistant questions per salary cycle; confirmation/cancellation does not count as another question. Demo reset clears usage. No paid checkout is implemented; upgrade controls only show "قريباً".

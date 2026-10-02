@@ -5,15 +5,17 @@ Docs at /docs.  Put your front end in ./static/index.html to serve it from /.
 from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
+from datetime import date as Date
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import assistant
 import db
@@ -99,10 +101,25 @@ class CategoryIn(BaseModel):
     merchant: str = Field(min_length=1, max_length=80)
     category: str = Field(pattern=r"^(essential|flexible):.{1,30}$")
 
+class ExpenseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: Decimal = Field(gt=0, le=1_000_000, max_digits=9, decimal_places=2)
+    merchant: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=200)
+    category: Literal[
+        "flexible:مطاعم", "flexible:توصيل", "flexible:تسوق",
+        "flexible:ترفيه", "flexible:أخرى",
+    ]
+    date: Optional[Date] = None
+
+    @field_validator("merchant", "description", mode="before")
+    @classmethod
+    def trim_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=500)
 
-ExpenseIn = inputs.ExpenseIn
 PlanIn = inputs.PlanIn
 ContactIn = inputs.ContactIn
 contact_limiter = security.RateLimiter(limit=5, window=60)
@@ -202,6 +219,40 @@ def post_scenarios(body: PriceIn, user=Depends(current_user)):
         return service.scenarios(con, user["id"], body.price)
 
 
+@app.get("/api/expenses")
+def get_expenses(user=Depends(current_user)):
+    with db.tx() as con:
+        return service.expense_overview(con, user["id"])
+
+
+@app.post("/api/expenses", status_code=201)
+def post_expense(body: ExpenseIn | inputs.ExpenseIn, response: Response, user=Depends(current_user)):
+    with db.tx() as con:
+        if isinstance(body, inputs.ExpenseIn):
+            service.add_expense(con, user["id"], **body.model_dump())
+            db.audit(con, user["hash"], "expense.added")
+            response.status_code = 200
+            return service.expense_overview(con, user["id"])
+        try:
+            item = service.add_expense(
+                con, user["id"], float(body.amount), body.merchant, body.category,
+                body.date, body.description,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        db.audit(con, user["hash"], "expense.added")
+        return {"expense": item}
+
+
+@app.delete("/api/expenses/{item_id}")
+def delete_expense(item_id: str, user=Depends(current_user)):
+    with db.tx() as con:
+        if not service.delete_expense(con, user["id"], item_id):
+            raise HTTPException(404, "المصروف اليدوي غير موجود.")
+        db.audit(con, user["hash"], "expense.deleted")
+        return {"ok": True}
+
+
 @app.get("/api/wishlist")
 def get_wishlist(user=Depends(current_user)):
     with db.tx() as con:
@@ -245,29 +296,6 @@ def set_category(body: CategoryIn, user=Depends(current_user)):
         service.set_category(con, user["id"], body.merchant, body.category)
         db.audit(con, user["hash"], "category.updated")
         return {"ok": True}
-
-
-@app.get("/api/expenses")
-def get_expenses(user=Depends(current_user)):
-    with db.tx() as con:
-        return service.expenses(con, user["id"])
-
-
-@app.post("/api/expenses")
-def post_expense(body: ExpenseIn, user=Depends(current_user)):
-    with db.tx() as con:
-        service.add_expense(con, user["id"], **body.model_dump())
-        db.audit(con, user["hash"], "expense.added")
-        return service.expenses(con, user["id"])
-
-
-@app.delete("/api/expenses/{tx_id}")
-def delete_expense(tx_id: int, user=Depends(current_user)):
-    with db.tx() as con:
-        if not service.delete_expense(con, user["id"], tx_id):
-            raise HTTPException(404, "المصروف مو موجود أو جاي من البنك.")
-        db.audit(con, user["hash"], "expense.deleted")
-        return service.expenses(con, user["id"])
 
 
 @app.get("/api/obligations")
