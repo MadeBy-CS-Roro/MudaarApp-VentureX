@@ -36,7 +36,7 @@ path = "scripts/post-merge.sh"
 timeoutMs = 180000
 
 [deployment]
-deploymentTarget = "vm"
+deploymentTarget = "cloudrun"
 run = ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
 
 [userenv]
