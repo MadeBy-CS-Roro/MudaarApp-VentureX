@@ -108,6 +108,50 @@ def test_next_month_notifies(client):
     assert s["safe_to_spend"] == 900 and s["spent"] == 0
 
 
+def test_wishlist_add_read_and_delete(client):
+    first = client.post("/api/wishlist", json={"name": "كاميرا", "price": 2400, "method": "save"})
+    assert first.status_code == 200
+    item = next(item for item in first.json()["items"] if item["name"] == "كاميرا")
+    assert item["price"] == 2400
+    assert item["method"] == "save"
+
+    second = client.post("/api/wishlist", json={"name": "سماعة", "price": 800, "method": "cash"})
+    assert second.status_code == 200
+    listed = client.get("/api/wishlist")
+    assert listed.status_code == 200
+    listed_names = [item["name"] for item in listed.json()["items"]]
+    assert "سماعة" in listed_names and "كاميرا" in listed_names
+
+    deleted = client.delete(f"/api/wishlist/{item['id']}")
+    assert deleted.status_code == 200
+    remaining_names = [entry["name"] for entry in deleted.json()["items"]]
+    assert "كاميرا" not in remaining_names
+    assert "سماعة" in remaining_names and "عمرة" in remaining_names
+    assert [entry["name"] for entry in client.get("/api/wishlist").json()["items"]] == remaining_names
+
+
+def test_wishlist_item_cannot_be_deleted_by_another_user(client):
+    created = client.post("/api/wishlist", json={"name": "جهاز لوحي", "price": 1800, "method": "fin12"})
+    item = next(item for item in created.json()["items"] if item["name"] == "جهاز لوحي")
+
+    other_user_hash = main.security.hash_id("wishlist-other-user")
+    with main.db.tx() as con:
+        con.execute(
+            "INSERT INTO users(user_hash, display_name) VALUES (?, ?)",
+            (other_user_hash, "other"),
+        )
+    other_user_token = main.security.sign_token({"sub": other_user_hash, "mode": "demo"})
+    other_user_headers = {"Authorization": f"Bearer {other_user_token}"}
+
+    response = client.delete(f"/api/wishlist/{item['id']}", headers=other_user_headers)
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+
+    still_owned = client.get("/api/wishlist")
+    assert still_owned.status_code == 200
+    assert any(entry["id"] == item["id"] for entry in still_owned.json()["items"])
+
+
 def test_bad_input_rejected(client):
     assert client.post("/api/scenarios", json={"price": -5}).status_code == 422
     assert client.get("/api/summary", headers={"Authorization": "Bearer forged.token"}).status_code == 401
