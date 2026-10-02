@@ -1,4 +1,4 @@
-const CACHE_NAME = "mawid-static-shell-v1";
+const CACHE_NAME = "mawid-static-shell-v3";
 const STATIC_FILES = [
   "/static/index.html",
   "/static/app.css",

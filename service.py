@@ -14,6 +14,7 @@ import provider
 import offers
 import budget
 import subscriptions
+import payments
 from fastapi import HTTPException
 
 DEFAULT_BUFFER = 500.0
@@ -68,7 +69,7 @@ def snapshot(con, user_id: int) -> E.Snapshot:
     by_cat: dict[str, float] = {}
     for x in txs + manual:
         if x["direction"] == "debit" and E.cycle_index(x["date"], sal["day"]) == cur:
-            cat = x["category"] or detect.categorize(x["merchant"], x["description"], ov) or "flexible:غير مصنف"
+            cat = x["category"] or detect.categorize(x["merchant"], x["description"], ov) or "flexible:أخرى"
             if cat.startswith("flexible:"):
                 spent += x["amount"]
                 name = cat.split(":", 1)[1]
@@ -188,13 +189,17 @@ def summary(con, user_id: int) -> dict:
     safe = E.safe_to_spend(s, cur)
     items, alerts = [], []
     views = {v["id"]: v for v in plans_view(con, user_id)}
+    paid_now = {r["plan_id"] for r in con.execute(
+        "SELECT plan_id FROM cycle_payments WHERE user_id=? AND cycle=?", (user_id, cur))}
     for p in s.plans:
         if not p.active_in(cur) or views[p.id]["remaining"] == 0:
             continue
         due = E.due_date_in_cycle(p.day, cur, sd)
         days = (due - t).days
-        items.append({**views[p.id], "due_date": due.isoformat(), "status": "paid" if days < 0 else "upcoming",
-                      "days_until": days, "before_salary": 0 <= days <= 5})
+        paid = days < 0 or p.id in paid_now
+        items.append({**views[p.id], "due_date": due.isoformat(), "status": "paid" if paid else "upcoming",
+                      "days_until": days,
+                      "before_salary": not paid and 0 <= days <= 5 and (next_salary - due).days <= 7})
     visibility = subscriptions.cap(con, user_id, sorted(items, key=lambda p: (-p["amount"], p["id"])))
     items = visibility["items"]
     soon = [i for i in items if i["before_salary"]]
@@ -413,9 +418,14 @@ def obligations_view(con, user_id: int) -> dict:
         if p["remaining"] == 0:
             continue
         due = E.due_date_in_cycle(p["day"], s.current, s.profile.salary_day)
+        row = con.execute("SELECT merchant, kind, pay_mode FROM plans WHERE user_id=? AND id=?",
+                          (user_id, p["id"])).fetchone()
+        paid_now = con.execute("SELECT 1 FROM cycle_payments WHERE user_id=? AND plan_id=? AND cycle=?",
+                               (user_id, p["id"], s.current)).fetchone()
         items.append({**p, "type": "installment" if p["kind"] in ("bnpl", "loan") else p["kind"],
                       "in_formula": True, "due_date": due.isoformat(),
-                      "status": "paid" if due < s.extra["today"] else "upcoming"})
+                      "pay_mode": payments.mode_of(row) if row else "manual",
+                      "status": "paid" if due < s.extra["today"] or paid_now else "upcoming"})
     previous = []
     for p in plans_view(con, user_id):
         if p["remaining"] == 0:
@@ -425,7 +435,7 @@ def obligations_view(con, user_id: int) -> dict:
     ov = overrides(con, user_id)
     for x in _txs(con, user_id, s.extra["today"]):
         cat = x["category"] or detect.categorize(x["merchant"], x["description"], ov) or ""
-        if x["direction"] != "debit" or cat not in ("essential:فواتير", "essential:اتصالات"):
+        if x["direction"] != "debit" or cat not in ("essential:فواتير", "essential:اتصالات وإنترنت"):
             continue
         cycle = E.cycle_index(x["date"], s.profile.salary_day)
         if cycle < s.current - 3:
@@ -468,7 +478,7 @@ def consume_chat_question(con, user_id: int) -> bool:
 
 def account(con, user_id: int, demo_mode: bool) -> dict:
     import os
-    user = con.execute("SELECT display_name FROM users WHERE id=?", (user_id,)).fetchone()
+    user = con.execute("SELECT display_name, phone_last3, email FROM users WHERE id=?", (user_id,)).fetchone()
     consent = con.execute("SELECT * FROM consents WHERE user_id=? AND status='active' "
                           "ORDER BY created_at DESC LIMIT 1", (user_id,)).fetchone()
     bank_id = consent["bank_id"] if consent else None
@@ -477,8 +487,9 @@ def account(con, user_id: int, demo_mode: bool) -> dict:
     usage = con.execute("SELECT questions FROM chat_usage WHERE user_id=? AND cycle=?",
                         (user_id, snap.current)).fetchone()
     used = usage["questions"] if usage else 0
-    return {"display_name": user["display_name"], "phone_masked": "05XX XXX 123" if demo_mode else None,
-            "email": "noura@example.com" if demo_mode else None,
+    return {"display_name": user["display_name"],
+            "phone_masked": f"05XX XXX {user['phone_last3']}" if user["phone_last3"] else None,
+            "email": user["email"],
             "bank_id": bank_id, "bank_name": names.get(bank_id, bank_id),
             "consent_expires_at": consent["expires_at"] if consent else None,
             "salary_day": snap.profile.salary_day, "demo_mode": demo_mode,

@@ -44,7 +44,7 @@ def summary(con, user_id: int, tool: str, p: dict) -> str:
         if not row:
             raise ValueError("الالتزام مو موجود.")
         if tool == "delete_obligation":
-            return f"نحذف التزام «{row['name']}» من موعد؟ هذا ما يلغي الدين عند الجهة."
+            return f"نحذف التزام «{row['name']}» من مُدار؟ هذا ما يلغي الدين عند الجهة."
         changes = []
         if p["amount"] is not None:
             changes.append(f"المبلغ {p['amount']:g} ر.س")

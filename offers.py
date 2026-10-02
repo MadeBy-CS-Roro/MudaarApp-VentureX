@@ -26,7 +26,7 @@ def compare(s: E.Snapshot, price: float, target_months: int | None = None) -> di
     best = min(rows, key=lambda r: (0 if r["ok"] else 1,
                r["earliest"] if r["earliest"] is not None else float("inf"), r["total"], r["monthly"]))
     for row in rows:
-        row["reason"] = (f"يبدأ {row['earliest_label']}، وتكلفته أقل من الخيارات اللي تناسب نفس الموعد."
+        row["reason"] = (f"يبدأ {row['earliest_label']}، وتكلفته أقل من الخيارات اللي تناسب نفس الوقت."
                          if row["earliest"] is not None else "ما يناسب ميزانيتك ضمن المدة اللي حسبناها.")
     saving = E.saving_deadline(s, price, target_months)
     months = saving["months"]

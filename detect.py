@@ -11,16 +11,33 @@ from datetime import date
 from engine import add_months, cycle_index
 
 # ---------- categorization rules ----------
+# Fixed category list. Every category belongs to one budget bucket (70/20/10 split).
+CATEGORIES = {
+    "essential": ["سكن وإيجار", "بقالة", "وقود", "فواتير", "اتصالات وإنترنت", "تعليم", "صحة",
+                  "مواصلات", "تأمين", "التزامات مالية"],
+    "flexible": ["مطاعم ومقاهي", "توصيل", "تسوق وملابس", "ترفيه", "سفر", "اشتراكات رقمية",
+                 "عناية شخصية", "هدايا ومناسبات", "رياضة", "أخرى"],
+}
+ALL_CATEGORIES = {f"{group}:{name}" for group, names in CATEGORIES.items() for name in names}
+
 RULES = [
-    (r"PANDA|TAMIMI|DANUBE|OTHAIM|CARREFOUR|LULU", "essential:بقالة"),
-    (r"ALDREES|SASCO|PETROMIN|NAFT", "essential:بنزين"),
+    (r"PANDA|TAMIMI|DANUBE|OTHAIM|CARREFOUR|LULU|NESTO|BINDAWOOD", "essential:بقالة"),
+    (r"ALDREES|SASCO|PETROMIN|NAFT|\bADES\b", "essential:وقود"),
     (r"ELECTRICITY|NATIONAL WATER|\bSEC\b|\bNWC\b", "essential:فواتير"),
-    (r"\bSTC\b|MOBILY|ZAIN", "essential:اتصالات"),
-    (r"SCHOOL|MADARIS", "essential:مدارس"),
-    (r"ALBAIK|HERFY|KUDU|MCDONALD|STARBUCKS|CAFE|RESTAURANT", "flexible:مطاعم"),
-    (r"JAHEZ|HUNGERSTATION|MRSOOL|KEETA|TOYOU", "flexible:توصيل"),
-    (r"NOON|AMAZON|SHEIN|CENTERPOINT|NAMSHI", "flexible:تسوق"),
-    (r"CINEMA|VOX|MUVI|NETFLIX|SHAHID", "flexible:ترفيه"),
+    (r"\bSTC\b|MOBILY|ZAIN|SALAM|\bINTERNET\b", "essential:اتصالات وإنترنت"),
+    (r"SCHOOL|MADARIS|UNIVERSITY|ACADEMY", "essential:تعليم"),
+    (r"PHARMACY|NAHDI|ALDAWAA|HOSPITAL|CLINIC|MEDICAL", "essential:صحة"),
+    (r"UBER|CAREEM|JEENY|METRO|SAPTCO|PARKING", "essential:مواصلات"),
+    (r"TAWUNIYA|BUPA|INSURANCE|MEDGULF", "essential:تأمين"),
+    (r"ALBAIK|HERFY|KUDU|MCDONALD|STARBUCKS|CAFE|COFFEE|RESTAURANT|BARNS|DUNKIN", "flexible:مطاعم ومقاهي"),
+    (r"JAHEZ|HUNGERSTATION|MRSOOL|KEETA|TOYOU|NINJA", "flexible:توصيل"),
+    (r"NOON|AMAZON|SHEIN|CENTERPOINT|NAMSHI|MAX FASHION|H&M|ZARA", "flexible:تسوق وملابس"),
+    (r"CINEMA|VOX|MUVI|BOULEVARD|PLAYSTATION|STEAM", "flexible:ترفيه"),
+    (r"NETFLIX|SHAHID|SPOTIFY|ANGHAMI|APPLE\.COM|ICLOUD|YOUTUBE", "flexible:اشتراكات رقمية"),
+    (r"SAUDIA|FLYNAS|FLYADEAL|BOOKING|AIRBNB|ALMOSAFER|HOTEL", "flexible:سفر"),
+    (r"SALON|BARBER|SPA|SEPHORA|NICE ONE", "flexible:عناية شخصية"),
+    (r"FLOWERS|GIFT|HADAYA", "flexible:هدايا ومناسبات"),
+    (r"FITNESS|GYM|\bGOLD'S\b|SPORT", "flexible:رياضة"),
     (r"PAYROLL|SALARY", "income"),
     (r"TAMARA|TABBY|FINANCE|LOAN|TAMWEEL|EJAR|RENT", "installment"),
 ]
@@ -30,7 +47,7 @@ PROVIDERS = {
                "action": {"kind": "url", "label": "افتح تمارا", "url": "https://tamara.co"}},
     "TABBY": {"name": "تابي", "kind": "bnpl", "default_total": 4,
               "action": {"kind": "url", "label": "افتح تابي", "url": "https://tabby.ai"}},
-    "AUTO FINANCE": {"name": "قسط السيارة", "kind": "loan", "default_total": None,
+    "AUTO FINANCE": {"name": "تمويل السيارة", "kind": "loan", "default_total": None,
                      "action": {"kind": "url", "label": "افتح تطبيق البنك", "url": "#"}},
     "EJAR": {"name": "الإيجار", "kind": "recurring", "default_total": None,
              "action": {"kind": "copy", "label": "انسخ رقم السداد", "value_from": r"SADAD (\d+)"}},

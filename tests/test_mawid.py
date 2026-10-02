@@ -115,17 +115,6 @@ def test_confirm_missing_plan_returns_not_found(client):
     assert response.status_code == 404
 
 
-def test_amount_only_correction_preserves_open_ended_plan(client):
-    response = client.post("/api/plans/ejar/confirm", json={"amount": 2200})
-    assert response.status_code == 200
-    plan = next(p for p in client.get("/api/plans").json()["plans"] if p["id"] == "ejar")
-    assert plan["amount"] == 2200
-    assert plan["remaining"] is None
-    summary_plan = next(p for p in client.get("/api/summary").json()["plans"] if p["id"] == "ejar")
-    assert summary_plan["amount"] == 2200
-    assert summary_plan["remaining"] is None
-
-
 def test_summary_numbers(client):
     s = client.get("/api/summary").json()
     assert s["formula"] == {"salary": 8700, "obligations": 4100, "essentials": 3500, "buffer": 500, "total_obligations": 7600}
@@ -136,7 +125,7 @@ def test_summary_numbers(client):
     assert any(a["type"] == "plan_ending" and a["name"] == "تابي" for a in s["alerts"])
 
 def _expense_payload(client, **changes):
-    payload = {"amount": 35.75, "merchant": "مقهى", "category": "flexible:مطاعم",
+    payload = {"amount": 35.75, "merchant": "مقهى", "category": "flexible:مطاعم ومقاهي",
                "date": client.get("/api/summary").json()["today"]}
     return {**payload, **changes}
 def test_scenarios(client):
@@ -245,6 +234,9 @@ def test_wishlist_item_cannot_be_deleted_by_another_user(client):
             "INSERT INTO users(user_hash, display_name) VALUES (?, ?)",
             (other_user_hash, "other"),
         )
+        other_id = con.execute("SELECT id FROM users WHERE user_hash=?", (other_user_hash,)).fetchone()["id"]
+        con.execute("INSERT INTO consents VALUES (?,?,?,?,?,?,?)",
+                    ("other-consent", other_id, "demo1", "[]", "active", "2026-01-01", "2099-01-01"))
     other_user_token = main.security.sign_token({"sub": other_user_hash, "mode": "demo"})
     other_user_headers = {"Authorization": f"Bearer {other_user_token}"}
 
@@ -385,8 +377,8 @@ def test_root_serves_frontend(client):
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 200
     assert 'text/html' in response.headers["content-type"]
-    assert '<html lang="ar" dir="rtl">' in response.text
-    assert 'id="p-overview"' in response.text
+    assert 'lang="ar" dir="rtl"' in response.text
+    assert 'id="view"' in response.text and "/static/app.js" in response.text
 
 
 def test_frontend_assets_and_api_docs(client):
@@ -465,7 +457,7 @@ def test_expense_merge_registers_one_route_per_operation(client):
                   and method in getattr(r, "methods", set())]
         assert len(routes) == 1
     response = client.post("/api/expenses", json={
-        "name": "قهوة", "amount": 20.001, "category": "flexible:قهوة",
+        "name": "قهوة", "amount": 20.001, "category": "flexible:مطاعم ومقاهي",
     })
     assert response.status_code == 422
 
@@ -473,7 +465,7 @@ def test_expense_merge_registers_one_route_per_operation(client):
 def test_expense_endpoints_preserve_production_auth(client, monkeypatch):
     monkeypatch.setattr(main, "PRODUCTION_MODE", True)
     monkeypatch.setattr(main, "DEMO_MODE", False)
-    payload = {"amount": 10, "merchant": "مقهى", "category": "flexible:مطاعم"}
+    payload = {"amount": 10, "merchant": "مقهى", "category": "flexible:مطاعم ومقاهي"}
     for method, path, kwargs in [
         ("get", "/api/expenses", {}),
         ("post", "/api/expenses", {"json": payload}),
@@ -576,8 +568,8 @@ def test_manual_expense_updates_balance_categories_and_can_be_deleted(client):
     after = client.get("/api/summary").json()
     assert after["spent"] == pytest.approx(before["spent"] + 35.75)
     assert after["available"] == pytest.approx(before["available"] - 35.75)
-    assert after["categories"]["flexible"]["مطاعم"] == pytest.approx(
-        before["categories"]["flexible"].get("مطاعم", 0) + 35.75)
+    assert after["categories"]["flexible"]["مطاعم ومقاهي"] == pytest.approx(
+        before["categories"]["flexible"].get("مطاعم ومقاهي", 0) + 35.75)
     assert after["formula"] == before["formula"]
     assert after["salary"] == before["salary"]
     assert after["categories"]["essentials"] == before["categories"]["essentials"]

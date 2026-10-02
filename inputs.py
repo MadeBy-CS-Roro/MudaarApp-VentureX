@@ -2,6 +2,14 @@
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+import detect
+
+
+def _known_category(value: str) -> str:
+    if value not in detect.ALL_CATEGORIES:
+        raise ValueError("اختر تصنيف من القائمة.")
+    return value
+
 
 class Input(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -11,6 +19,8 @@ class ExpenseIn(Input):
     name: str = Field(min_length=1, max_length=60)
     amount: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
     category: str = Field(pattern=r"^(essential|flexible):.{1,30}$")
+
+    _cat = field_validator("category")(classmethod(lambda cls, v: _known_category(v)))
 
     @field_validator("amount")
     @classmethod
@@ -51,6 +61,7 @@ class DeleteWishIn(Input):
 class CategoryIn(Input):
     merchant: str = Field(min_length=1, max_length=80)
     category: str = Field(pattern=r"^(essential|flexible):.{1,30}$")
+    _cat = field_validator("category")(classmethod(lambda cls, v: _known_category(v)))
 
 
 class ContactIn(Input):

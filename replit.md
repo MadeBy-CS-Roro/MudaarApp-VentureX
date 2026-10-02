@@ -1,4 +1,4 @@
-# Mawid backend
+# مُدار (Mudar)
 
 This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its existing structure and stack.
 
@@ -23,7 +23,7 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 
 - Required secrets: `HMAC_KEY` and `SIGNING_SECRET`, with distinct long random values. Both are configured in Replit Secrets; never commit their values.
 - Optional secret: `ANTHROPIC_API_KEY`. Without it, chat uses the included rule-based assistant.
-- Demo mode is the default (`MAWID_ENV=demo`, or unset): authentication is optional and the provider uses fake banking data. This setup is for a demo, not real banking or production use.
+- Demo mode is the default (`MAWID_ENV=demo`, or unset): login is required and the provider uses fake banking data. Quick Noura login and on-screen verification codes are demo-only. This setup is for a demo, not real banking or production use.
 - To enable production safeguards, set `MAWID_ENV=production` (or the compatible `DEMO_MODE=false`). Production requires distinct random `HMAC_KEY` and `SIGNING_SECRET` values of at least 32 characters, plus `ALLOWED_ORIGINS` as a comma-separated list of exact HTTPS origins without paths or wildcards. The app refuses to start if these settings are missing or invalid.
 - Production API requests require a signed bearer token with a `mode` claim of `production` and a `sub` matching a provisioned user's HMAC. Demo consent, reset, and next-month simulation routes are unavailable in production. This backend does not yet include production identity/token issuance or real bank enrollment; connect an approved identity/banking flow before onboarding real users.
 - SQLite defaults to `mawid.db` in the project directory; `MAWID_DB` can override its path. Do not commit runtime databases.
@@ -32,17 +32,28 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 
 ## Trying the demo
 
-Open the preview and use the demo bank onboarding when prompted. You can also call `POST /api/consent` with `{"bank_id":"demo1"}` to initialize demo data, then try `/api/summary`, `/api/plans`, `/api/scenarios`, and `/api/chat` in the docs.
+Open the preview and sign up with a demo verification code, or use quick Noura login. Complete demo bank onboarding when prompted. In API docs, obtain a token from `/api/auth/demo` and send it as a Bearer token before calling `/api/consent` and the protected financial endpoints.
 Consent creation and `/api/demo/reset` reset the demo data. No live bank connection is configured.
 
 
 ## Phone app scope
 
-Backend updates are approved. Port uploaded features selectively while preserving current security, production safeguards, backups, and wishlist fixes. Do not replace the backend wholesale.
+The user approved replacing the full app with the uploaded Mudar frontend and backend, including its login and simulated payment flows. Preserve saved data, security, production safeguards, backups, and financial calculation rules when making further changes.
 Manual flexible expense entry, dated history, and manual-only deletion use `/api/expenses`; bank-derived transactions remain read-only in that history.
-All screens are Arabic RTL, purple/teal, phone-first (390px); desktop keeps a centered frame no wider than 430px. Preserve provider demo data and the safe-to-spend formula. Only the session token and per-device appearance choice may be stored in localStorage. Budget targets and subscription are server-owned per-user data. Assistant writes require explicit, expiring, one-time confirmation.
+All screens are Arabic RTL, purple/teal, phone-first (390px); desktop keeps a centered frame no wider than 430px. Preserve provider demo data and the safe-to-spend formula. Only the session token and per-device appearance choice (`mudar_theme`) may be stored in localStorage. Budget targets and subscription are server-owned per-user data. Assistant writes require explicit, expiring, one-time confirmation.
 Use consistent casual Saudi Arabic, address the user in masculine singular, and greet with "هلا نورة". Use هالشهر، الشهر الجاي، الحين، شهور، ر.س. Shared number agreement comes from the language API.
 The assistant includes five questions per salary cycle; confirmation/cancellation does not count as another question. Demo reset clears usage. No paid checkout is implemented. Demo Noura starts Plus and can switch tiers without payment; production cannot call the demo switch.
 Budget targets default 70/20/10 and must total 100. Actual essentials combine plans and usual essentials; remaining includes the safety buffer. Savings deadlines count this month's deposit as period one, unlike elapsed `buyK`: 3000 at 10% requires five deposits, four future months; three deposits reach 1920. The user's savings target drives the shared saving rule.
 Subscriptions limit active obligations to Basic5 / Plus30 / Premiumunlimited without changing totals. Basic has no smart-account or planner access; Plus adds both; only Premium gets a 12-month financial forecast. Completed plans appear in previous payments rather than active obligations.
 Contact form submissions are stored locally and rate limited. Public email/WhatsApp links need the non-secret settings `MAWID_CONTACT_EMAIL` and `MAWID_CONTACT_WHATSAPP`; do not invent owner contact details.
+
+
+## Login and payments (latest)
+- Passwordless login: `POST /api/auth/signup`, `/api/auth/login`, `/api/auth/verify` (phone + 6-digit code).
+  Demo mode returns `demo_code` and shows it on screen. Production returns 501 until an SMS provider is set.
+- Quick demo login as Noura: `POST /api/auth/demo` (button on the welcome screen). Demo phone: 0500000123.
+- All `/api` routes need the token, except health, categories, contact and auth.
+- `POST /api/consent` connects the bank for the logged-in user.
+- Pay all: `GET /api/payments/due`, `POST /api/payments/pay` (demo only, simulated bank approval), `PATCH /api/plans/{id}` `{pay_mode}`.
+- Fixed categories: `GET /api/categories`.
+- Tests set `MUDAR_ALLOW_ANON=1` in tests/conftest.py so old tests can call without a token. Never set it on the live app.

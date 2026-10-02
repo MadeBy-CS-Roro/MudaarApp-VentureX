@@ -1,249 +1,33 @@
 <!doctype html>
-<html lang="ar" dir="rtl">
+<html lang="ar" dir="rtl" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#7650d4">
+  <meta name="theme-color" content="#1c1a28">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="موعد">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="مُدار">
   <link rel="manifest" href="/static/manifest.json">
   <link rel="icon" type="image/png" href="/static/icon-192.png">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
-  <script>try{document.documentElement.dataset.theme=localStorage.getItem("mawid_appearance")||"system"}catch(_){document.documentElement.dataset.theme="system"}</script>
-  <link rel="stylesheet" href="/static/app.css">
-  <title>موعد — فلوسك أوضح</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem("mudar_theme")||"dark"}catch(_){}</script>
+  <link rel="stylesheet" href="/static/app.css?v=3">
+  <title>مُدار</title>
 </head>
 <body>
-  <div class="phone" id="app">
-    <header class="topbar">
-      <a class="brand" href="#overview" aria-label="موعد، الرئيسية">
-        <span class="brand-mark" aria-hidden="true">م</span>
-        <span><b>موعد</b><small>فلوسك أوضح</small></span>
-      </a>
-      <button class="heart-button" id="open-wishlist" aria-label="قائمة الأمنيات">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 8.7c0 5.2-8.8 11-8.8 11s-8.8-5.8-8.8-11A4.6 4.6 0 0 1 12 6a4.6 4.6 0 0 1 8.8 2.7Z"/></svg>
-        <span class="wish-count" id="wish-count" aria-label="عدد الأمنيات">0</span>
-      </button>
-    </header>
-
-    <main id="main-content">
-      <section class="page" id="p-overview" aria-labelledby="overview-title">
-        <div class="hero-card">
-          <div class="hero-copy"><span class="eyebrow">صورتك المالية</span><h1 id="overview-title">هلا</h1><p id="ov-sub">هذي خطتك لهالشهر</p></div>
-          <div class="hero-mark" aria-hidden="true">م</div>
-        </div>
-        <div id="ov-stats" class="stats-grid"></div>
-        <div id="ov-alerts"></div>
-        <article class="surface formula-card">
-          <div class="section-heading"><div><span class="eyebrow">ببساطة</span><h2>وش يبقى لك؟</h2></div><span class="mini-icon">↘</span></div>
-          <div id="ov-formula" class="formula"></div>
-          <p class="quiet" id="ov-formula-note"></p>
-        </article>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">على بالك</span><h2>الدفعة الجاية</h2></div><a href="#obligations" class="text-link">كل الالتزامات</a></div>
-          <div id="ov-next"></div>
-        </article>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">نظرة سريعة</span><h2>توزيع راتبك</h2></div></div>
-          <div id="ov-chart" class="chart-layout"></div>
-          <div id="ov-legend" class="legend"></div>
-        </article>
-      </section>
-
-      <section class="page" id="p-expenses" aria-labelledby="expenses-title">
-        <div class="page-intro"><span class="eyebrow">صرفك بدون تعقيد</span><h1 id="expenses-title">المصروفات</h1><p>سجل مصروفك وشوف وين تروح فلوسك.</p></div>
-        <div id="ex-summary" class="stats-grid"></div>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">أضف من جيبك</span><h2>مصروف جديد</h2></div></div>
-          <form id="expense-form" class="stack-form">
-            <label>وش اشتريت؟<input name="name" required maxlength="80" autocomplete="off" placeholder="مثال: قهوة"></label>
-            <div class="form-row">
-              <label>المبلغ، ر.س<input name="amount" required inputmode="decimal" type="number" min="0.01" max="1000000" step="0.01" placeholder="0"></label>
-              <label>الفئة<select name="category" required><option value="flexible:مطاعم">مطاعم</option><option value="flexible:توصيل">توصيل</option><option value="flexible:تسوق">تسوق</option><option value="flexible:ترفيه">ترفيه</option><option value="flexible:أخرى">أخرى</option></select></label>
-            </div>
-            <label>تاريخ المصروف<input name="date" type="date" required></label>
-            <label>وصف إضافي، اختياري<textarea name="description" maxlength="200"></textarea></label>
-            <p class="quiet">سجّل بس المصروف اللي مو موجود بالبنك عشان ما ينحسب مرتين. تاريخ العملية يحدد دورة الراتب اللي ينحسب فيها.</p>
-            <button class="button primary" type="submit">أضف المصروف</button>
-          </form>
-        </article>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">المسجل عندك</span><h2>سجل المصروفات</h2></div><button class="button secondary" id="expense-refresh" type="button">تحديث</button></div>
-          <div id="expense-list" aria-live="polite"></div>
-        </article>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">تصنيف تلقائي</span><h2>عدّل تصنيف متجر</h2></div></div>
-          <p class="quiet">التصنيف يتطبق على كل عمليات هالمتجر.</p>
-          <form id="category-form" class="stack-form">
-            <label>اسم المتجر<input name="merchant" required maxlength="80" placeholder="مثل ما يظهر بكشف الحساب"></label>
-            <label>الفئة<select name="category"><option value="flexible:مطاعم">مرن · مطاعم</option><option value="flexible:توصيل">مرن · توصيل</option><option value="flexible:تسوق">مرن · تسوق</option><option value="flexible:ترفيه">مرن · ترفيه</option><option value="flexible:أخرى">مرن · أخرى</option><option value="essential:بقالة">أساسي · بقالة</option><option value="essential:بنزين">أساسي · بنزين</option><option value="essential:فواتير">أساسي · فواتير</option></select></label>
-            <button class="button secondary" type="submit">حفظ التصنيف</button>
-          </form>
-        </article>
-        <p class="footnote">الأساسيات متوسط آخر 3 شهور، والمصروفات المرنة من دورة الراتب الحالية.</p>
-      </section>
-
-      <section class="page" id="p-obligations" aria-labelledby="ob-title">
-        <div class="page-intro"><span class="eyebrow">خططك والتزاماتك</span><h1 id="ob-title">الالتزامات</h1><p>كل اللي عليك هالشهر، في مكان واحد.</p></div>
-        <article class="total-card"><span>التزاماتك الشهرية</span><strong id="ob-total">—</strong><small>الأقساط والمعيشة، بدون تكرار الفواتير</small></article>
-        <div class="segmented" role="tablist" aria-label="عرض الالتزامات">
-          <button role="tab" aria-selected="true" data-ob-tab="all">الكل</button>
-          <button role="tab" aria-selected="false" data-ob-tab="plans">الأقساط</button>
-          <button role="tab" aria-selected="false" data-ob-tab="living">المعيشة</button>
-        </div>
-        <div class="stats-grid compact" id="ob-stats"></div>
-        <article class="surface" id="manual-plan-panel">
-          <div class="section-heading"><div><span class="eyebrow">شي مو ظاهر؟</span><h2>إضافة التزام</h2></div></div>
-          <form id="plan-form" class="stack-form">
-            <label>اسم الالتزام<input name="name" required maxlength="80" placeholder="مثال: اشتراك النادي"></label>
-            <div class="form-row">
-              <label>المبلغ الشهري، ر.س<input name="amount" type="number" min="0.01" step="0.01" required inputmode="decimal"></label>
-              <label>يوم الاستحقاق<input name="day" type="number" min="1" max="28" required inputmode="numeric" placeholder="1–28"></label>
-            </div>
-            <div class="form-row">
-              <label>النوع<select name="kind"><option value="recurring">شهري ثابت</option><option value="bnpl">تقسيط</option><option value="loan">تمويل</option></select></label>
-              <label>دفعات باقية، اختياري<input name="remaining" type="number" min="1" max="600" inputmode="numeric" placeholder="بدون عدد محدد"></label>
-            </div>
-            <button class="button primary" type="submit">أضف الالتزام</button>
-          </form>
-        </article>
-        <div id="ob-list"></div>
-        <div id="living-list"></div>
-        <article class="surface"><div class="section-heading"><div><span class="eyebrow">منتهية</span><h2>المدفوعات السابقة</h2></div></div><div id="ob-previous-payments"></div></article>
-        <p class="footnote">الأساسيات متوسط آخر 3 شهور. الفواتير تظهر كعناصر، وهي محسوبة ضمن المتوسط أصلًا.</p>
-      </section>
-
-      <section class="page" id="p-buy" aria-labelledby="buy-title">
-        <div class="page-intro"><span class="eyebrow">قبل لا تشتري</span><h1 id="buy-title">المخطط</h1><p>قارن الخيارات على وضعك الحقيقي.</p></div>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">خلنا نحسبها</span><h2>وش ناوي تشتري؟</h2></div></div>
-          <form id="planner-form" class="stack-form">
-            <label>اسم المنتج<input id="buy-name" maxlength="60" placeholder="مثال: جوال"></label>
-            <label>السعر، ر.س<input id="buy-price" type="number" min="1" step="0.01" inputmode="decimal" required placeholder="اكتب السعر"></label>
-            <label>بكم شهر تبي توصل للهدف؟<input id="buy-target-months" type="number" min="1" max="36" step="1" inputmode="numeric" value="3"></label>
-          </form>
-        </article>
-        <div id="buy-scenarios" class="offer-stack" aria-live="polite"></div>
-        <div id="save-plan"></div>
-        <p class="sample-note">عروض تجريبية للتوضيح. العروض الحقيقية تجي من الجهات بعد الشراكة.</p>
-        <article class="surface explainer">
-          <span class="eyebrow">كيف نحسبها؟</span>
-          <p>نحسب كم ينخصم كل شهر ونشوف أضيق شهر. هامش الأمان 500 ر.س. حسبنا التمويل بأرباح 10% كمثال، والنسبة تختلف من جهة لجهة. هذي معلومات، مو استشارة مالية.</p>
-        </article>
-      </section>
-
-      <section class="page" id="p-account" aria-labelledby="account-title">
-        <div class="page-intro"><span class="eyebrow">كل شي يخصك</span><h1 id="account-title">حسابي</h1><p>بياناتك وخصوصيتك في مكان واحد.</p></div>
-        <div id="account-profile"></div>
-        <div id="account-plan"></div>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">على راحتك</span><h2>توزيع راتبك</h2></div></div>
-          <div class="budget-pies">
-            <section aria-labelledby="budget-actual-title"><h3 id="budget-actual-title">الفعلي هالشهر</h3><div id="budget-actual-chart" class="budget-chart"></div><div id="budget-actual-legend" class="legend"></div></section>
-            <section aria-labelledby="budget-target-title"><h3 id="budget-target-title">الهدف</h3><div id="budget-target-chart" class="budget-chart"></div><div id="budget-target-legend" class="legend"></div></section>
-          </div>
-          <div id="budget-warnings" aria-live="polite"></div>
-          <form id="budget-form" class="stack-form budget-form">
-            <p class="quiet">عدّل النسب على راحتك؛ لازم مجموعها يكون 100٪.</p>
-            <div class="form-row">
-              <label>الأساسيات ٪<input name="essentials_pct" type="number" min="0" max="100" step="1" required></label>
-              <label>شخصية ٪<input name="personal_pct" type="number" min="0" max="100" step="1" required></label>
-            </div>
-            <label>الادخار ٪<input name="savings_pct" type="number" min="0" max="100" step="1" required></label>
-            <p id="budget-total" class="budget-total" aria-live="polite">المجموع 100٪</p>
-            <button class="button secondary" type="submit">حفظ الأهداف</button>
-          </form>
-        </article>
-        <article class="surface"><div class="section-heading"><div><span class="eyebrow">نظرة لقدّام</span><h2>الحساب الذكي</h2></div></div><div id="smart-account"></div></article>
-        <article class="surface"><div class="section-heading"><div><span class="eyebrow">على مدى سنة</span><h2>التوقعات المالية</h2></div></div><div id="forecast"></div></article>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">مظهر موعد</span><h2>المظهر</h2></div></div>
-          <label class="theme-setting">اختيار المظهر<select id="theme-choice"><option value="light">فاتح</option><option value="dark">داكن</option><option value="system">حسب الجهاز</option></select></label>
-        </article>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">بياناتك بأمان</span><h2>خصوصيتك</h2></div></div>
-          <ul class="privacy-list"><li>مصاريفك ما تطلع لأي جهة.</li><li>المساعد يشوف الإجماليات، مو عملياتك.</li><li>ما نربح من الرسوم المتأخرة، وما نشجعك على أقساط جديدة.</li><li>تقدر تلغي الموافقة بأي وقت.</li></ul>
-        </article>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">نسمع منك</span><h2>تواصل معنا</h2></div></div>
-          <div id="contact-channels"></div>
-          <form id="contact-form" class="stack-form">
-            <label>اسمك<input name="name" required maxlength="60" autocomplete="name"></label>
-            <label>رسالتك<textarea name="message" required minlength="5" maxlength="2000" rows="4" placeholder="اكتب لنا وش في بالك"></textarea></label>
-            <button class="button secondary" type="submit">إرسال الرسالة</button>
-          </form>
-        </article>
-        <article class="surface">
-          <div class="section-heading"><div><span class="eyebrow">إدارة الربط</span><h2>إلغاء الموافقة</h2></div></div>
-          <p class="quiet">إذا ألغيت الموافقة، بنحذف بيانات حسابك المرتبطة.</p>
-          <button class="button danger full" id="btn-revoke" type="button">إلغاء الموافقة وحذف بياناتي</button>
-        </article>
-        <div id="demo-tools"></div>
-      </section>
-
-      <section class="page" id="p-subscriptions" aria-labelledby="subscriptions-title">
-        <div class="page-intro"><span class="eyebrow">اختياراتك</span><h1 id="subscriptions-title">الاشتراكات</h1><p>اختر الأدوات اللي تناسب احتياجك. ما فيه دفع من هنا.</p></div>
-        <div id="subscription-comparison"></div>
-      </section>
-
-      <section class="page" id="p-wish" aria-labelledby="wish-title">
-        <div class="page-intro"><span class="eyebrow">أشياء على بالك</span><h1 id="wish-title">قائمة الأمنيات</h1><p>بنذكّرك أول ما يصير الشي مناسب لك.</p></div>
-        <article class="surface">
-          <form id="wish-form" class="stack-form">
-            <label>اسم المنتج<input name="name" required maxlength="60" placeholder="وش ودك تشتري؟"></label>
-            <div class="form-row">
-              <label>السعر، ر.س<input name="price" required type="number" min="1" step="0.01" inputmode="decimal"></label>
-              <label>الطريقة<select name="method" id="wish-method"></select></label>
-            </div>
-            <button class="button primary" type="submit">أضف للأمنيات</button>
-          </form>
-        </article>
-        <div id="wish-stats" class="stats-grid compact"></div>
-        <div id="wish-list" class="wish-list"></div>
-        <article class="surface demo-control" id="demo-next-month"><p>تبي تشوف وش يصير الشهر الجاي؟</p><button class="button secondary full" id="btn-next-month" type="button">انتقل للشهر الجاي</button></article>
-      </section>
-    </main>
-
-    <button class="chat-fab" id="chat-open" aria-label="افتح المساعد" aria-expanded="false">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-10.9 6.7L4 20l1.4-5A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11h.01M12 11h.01M16 11h.01"/></svg>
-    </button>
-    <nav class="bottom-nav" aria-label="التنقل الرئيسي">
-      <a href="#expenses" data-page="expenses"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v15H4zM8 9h8M8 13h5"/><path d="M8 2v3m8-3v3"/></svg><span>المصروفات</span></a>
-      <a href="#obligations" data-page="obligations"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18H6zM9 7h6M9 11h6M9 15h4"/></svg><span>الالتزامات</span></a>
-      <a class="home-tab" href="#overview" data-page="overview" aria-label="الرئيسية"><span class="home-orb"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10h-6v-6H9v6H3z"/></svg></span><span>الرئيسية</span></a>
-      <a href="#buy" data-page="buy"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16M6 16l4-5 3 2 5-7"/><path d="M15 6h3v3"/></svg><span>المخطط</span></a>
-      <a href="#account" data-page="account"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span>حسابي</span></a>
-    </nav>
+  <div class="phone">
+    <header class="topbar" id="topbar"></header>
+    <main id="view" aria-live="polite"></main>
   </div>
-  <div class="chat-backdrop" id="chat-backdrop" hidden></div>
-  <section class="chat-sheet" id="chat-sheet" role="dialog" aria-modal="true" aria-labelledby="chat-title" aria-hidden="true">
-    <div class="sheet-grip"></div>
-    <header class="chat-header"><div><span class="eyebrow">مساعد موعد</span><h2 id="chat-title">وش ودك تعرف؟</h2></div><button class="close-button" id="chat-close" aria-label="إغلاق المحادثة">×</button></header>
-    <div class="chat" id="chat-messages" aria-live="polite"></div>
-    <div class="suggestions" id="chat-suggestions"></div>
-    <form class="chat-composer" id="chat-form"><label class="sr-only" for="chat-input">اكتب رسالتك</label><input id="chat-input" maxlength="500" autocomplete="off" placeholder="اكتب رسالتك…"><button class="send-button" type="submit" aria-label="إرسال"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4zM22 2 11 13"/></svg></button></form>
-  </section>
-  <div class="toast-region" id="toasts" role="status" aria-live="polite"></div>
 
-  <section class="onboarding" id="onboarding" hidden aria-labelledby="onboard-title">
-    <div class="onboarding-content">
-      <div class="brand onboarding-brand"><span class="brand-mark">م</span><span><b>موعد</b><small>فلوسك أوضح</small></span></div>
-      <div id="ob-connect">
-        <span class="eyebrow">نبدأ بخطوة بسيطة</span><h1 id="onboard-title">اربط حسابك البنكي</h1>
-        <p class="intro-copy">نقرأ عملياتك عشان نفهم مصاريفك ونلقى أقساطك. ما نقدر نحوّل ولا ندفع.</p>
-        <div class="bank-list" id="banks"></div>
-        <article class="surface permission-card"><h2>وش اللي بتوافق عليه</h2><ul><li>قراءة الحسابات والرصيد</li><li>قراءة العمليات لآخر 12 شهر</li><li class="not-allowed">ما نقدر نحوّل أو ندفع من حسابك</li><li>تقدر تلغي الموافقة بأي وقت، وتنتهي لحالها بعد 90 يوم</li></ul></article>
-        <button class="button primary full" id="btn-connect" disabled>وافق من تطبيق البنك</button>
-        <p class="quiet centered" id="ob-demo-note">بيانات تجريبية للعرض</p>
-      </div>
-      <div id="ob-loading" hidden><div class="skeleton-block"></div><h2>لحظة، نجهز حسابك…</h2><p class="quiet" id="ob-loading-text">ننتظر موافقتك من تطبيق البنك…</p></div>
-      <div id="ob-production" hidden><span class="eyebrow">موعد</span><h1>تسجيل الدخول مو متاح بهالنسخة.</h1><p class="intro-copy">ما ربطنا حسابك، وما راح نبدأ تدفق موافقة تجريبي.</p></div>
-      <div id="ob-error" hidden><span class="eyebrow">نرجع نحاول</span><h1>فيه مشكلة بالاتصال</h1><p class="intro-copy" id="ob-error-text">تأكد من النت وجرّب مرة ثانية.</p><button class="button primary full" id="btn-retry">حاول مرة ثانية</button></div>
-          <div id="ob-detect" hidden><span class="eyebrow">خطوة أخيرة</span><h1 id="ob-detect-title">راجع الخطط اللي لقيناها</h1><p class="intro-copy">راجع كل خطة وعدّل المبلغ أو الدفعات الباقية، وبعدها أكدها.</p><div class="detected-plans" id="ob-plans"></div><button class="button primary full" id="btn-onboard-done" disabled>تمام، ودّني للرئيسية</button></div>
-    </div>
-  </section>
+  <nav class="nav" id="nav" aria-label="التنقل" hidden></nav>
+  <button class="fab" id="fab" aria-label="مساعد مُدار" hidden></button>
+  <div id="layer"></div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
 
-  <script src="/static/app.js" defer></script>
-  <script>if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/static/sw.js").catch(() => {}));</script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

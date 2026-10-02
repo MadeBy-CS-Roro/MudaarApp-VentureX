@@ -1,1079 +1,1151 @@
-(() => {
-  "use strict";
+"use strict";
+/* مُدار — phone web app. Every number comes from the API; nothing is calculated here
+   except formatting and the ring's percentage. */
 
-  const $ = id => document.getElementById(id);
-  const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
-  const number = value => Number(value || 0);
-  const format = value => number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
-  const money = value => `${format(value)} ر.س`;
-  const toNum = value => Number(String(value ?? "").replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d.]/g, ""));
-  let token = null;
-  try { token = localStorage.getItem("mawid_token"); } catch (_) {}
-  let apiMode = "unknown", started = false, language = null, selectedBank = null;
-  let obligationsCache = null, plannerResult = null, chosenMethod = null, wishlistCount = 0, salaryAmount = 0;
-  let obTab = "all", planBusy = false, expenseBusy = false, chatBusy = false, offerTimer;
-  let expenseToday = "";
-  const deletingExpenses = new Set();
-  const PAGES = ["overview", "expenses", "obligations", "buy", "account", "wish", "subscriptions"];
-  const METHOD_LABELS = { cash: "كاش", save: "تجمع أول", fin12: "تمويل 12 شهر" };
-  const METHOD_IDS = ["save", "cash", "bnpl3", "bnpl4", "bnpl6", "fin12"];
-  const appearanceQuery = window.matchMedia("(prefers-color-scheme: dark)");
-  function applyAppearance(value) {
-    const selected = ["light","dark","system"].includes(value) ? value : "system";
-    document.documentElement.dataset.theme = selected;
-    const resolved = selected === "system" ? (appearanceQuery.matches ? "dark" : "light") : selected;
-    document.documentElement.style.colorScheme = resolved;
-    const metaTheme = document.querySelector('meta[name="theme-color"]');
-    if (metaTheme) metaTheme.content = resolved === "dark" ? "#211f2b" : "#7650d4";
-    return selected;
-  }
-  let appearance = "system";
-  try { appearance = localStorage.getItem("mawid_appearance") || "system"; } catch (_) {}
-  appearance = applyAppearance(appearance);
-  appearanceQuery.addEventListener?.("change", () => { if (appearance === "system") applyAppearance("system"); });
-  $("theme-choice").value = appearance;
-  $("theme-choice").addEventListener("change", event => {
-    appearance = applyAppearance(event.target.value);
-    try { localStorage.setItem("mawid_appearance", appearance); } catch (_) {}
-  });
-  document.addEventListener("click", event => {
-    if (event.target.closest("[data-retry-smart]")) renderSmartAccount(accountCache?.entitlements || {});
-    if (event.target.closest("[data-retry-forecast]")) renderForecast(accountCache?.entitlements || {});
-  });
+/* ===================== helpers ===================== */
+const $ = (sel, el = document) => el.querySelector(sel);
+const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = n => Math.round(Number(n) || 0).toLocaleString("en-US");
+const money = n => `<span class="num">${fmt(n)}</span> ر.س`;
+const toNum = s => Number(String(s ?? "").replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d.]/g, "")) || 0;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-  async function api(path, options = {}) {
-    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const response = await fetch(path, { ...options, headers, body: options.body !== undefined ? JSON.stringify(options.body) : undefined });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const raw = data.detail;
-      let message = typeof raw === "string" ? raw : typeof raw?.message === "string" ? raw.message : "فيه مشكلة بالاتصال، جرّب مرة ثانية.";
-      if (/ما فيه حساب مربوط|ابدأ من POST \/api\/consent/.test(message)) message = "اربط حسابك البنكي أول.";
-      const error = new Error(message);
-      error.status = response.status;
-      error.feature = raw?.feature || data.feature || null;
-      throw error;
+function counted(n, kind = "payments") {
+  const f = kind === "days"
+    ? ["يوم واحد", "يومين", "أيام", "يوم"]
+    : kind === "months" ? ["شهر واحد", "شهرين", "شهور", "شهر"]
+    : ["دفعة وحدة", "دفعتين", "دفعات", "دفعة"];
+  if (n === 1) return f[0];
+  if (n === 2) return f[1];
+  return `${n} ${n >= 3 && n <= 10 ? f[2] : f[3]}`;
+}
+const whenDays = d => d <= 0 ? "اليوم" : d === 1 ? "بكرة" : d === 2 ? "بعد يومين" : `بعد ${counted(d, "days")}`;
+const catName = c => (c && c.includes(":")) ? c.split(":")[1] : "أخرى";
+const METHOD = { cash: "كاش", bnpl3: "3 دفعات", bnpl4: "4 دفعات", bnpl6: "6 شهور", fin12: "تمويل 12 شهر", save: "تجمع أول" };
+
+const ICON = {
+  home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  expenses: '<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4M16 3v4M8 11h8M8 15h5"/>',
+  obligations: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h5"/>',
+  planner: '<path d="M4 19h16"/><path d="m6 15 4-5 3 2 5-6"/><path d="M15 6h3v3"/>',
+  account: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  heart: '<path d="M20.8 8.6c0 5.3-8.8 11-8.8 11s-8.8-5.7-8.8-11A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.4z"/>',
+  chat: '<path d="M20 12a8 8 0 0 1-11.7 7.1L4 20l1-4.1A8 8 0 1 1 20 12z"/>',
+  send: '<path d="m3 11 18-8-8 18-2-8z"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  back: '<path d="m9 6 6 6-6 6"/>',
+  check: '<path d="m5 12 4 4 10-10"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
+  ext: '<path d="M14 4h6v6M10 14 20 4M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  card: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/>',
+  bill: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  wallet: '<path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M21 8h-5a3 3 0 0 0 0 6h5z"/>',
+  bank: '<path d="m3 9 9-5 9 5M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>'
+};
+const ic = (name, cls = "icon") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name] || ""}</svg>`;
+
+function toast(html, kind = "", ms = 5000) {
+  const t = document.createElement("div");
+  t.className = "toast " + kind;
+  t.innerHTML = html;
+  $("#toasts").appendChild(t);
+  setTimeout(() => t.remove(), ms);
+}
+
+/* ===================== API ===================== */
+const S = {
+  token: null, me: null, demo: true,
+  chat: [], planner: { name: "جوال", price: "3000", months: "", chosen: null, others: false },
+  obTab: "current", lastPhone: "", demoCode: "", authFlow: null
+};
+try { S.token = localStorage.getItem("mawid_token"); } catch (_) {}
+
+function setToken(t) {
+  S.token = t;
+  try { t ? localStorage.setItem("mawid_token", t) : localStorage.removeItem("mawid_token"); } catch (_) {}
+}
+
+async function api(path, { method = "GET", body } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (S.token) headers.Authorization = "Bearer " + S.token;
+  let res;
+  try {
+    res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  } catch (_) {
+    const e = new Error("فيه مشكلة بالاتصال، جرّب مرة ثانية."); e.status = 0; throw e;
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    let msg = "صار شي غلط، جرّب مرة ثانية.";
+    if (typeof data.detail === "string") msg = data.detail;
+    else if (Array.isArray(data.detail)) msg = "تأكد من البيانات المدخلة.";
+    const e = new Error(msg); e.status = res.status; throw e;
+  }
+  return data;
+}
+
+function handleError(e) {
+  if (e.status === 401) { setToken(null); showWelcome(); return; }
+  if (e.status === 404 && /اربط حسابك/.test(e.message)) { showBankConnect(); return; }
+  toast(esc(e.message), "bad");
+}
+
+/* ===================== theme ===================== */
+function applyTheme(t) {
+  const theme = t || (() => { try { return localStorage.getItem("mudar_theme") || "dark"; } catch (_) { return "dark"; } })();
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem("mudar_theme", theme); } catch (_) {}
+  const dark = theme === "dark" || (theme === "system" && !matchMedia("(prefers-color-scheme: light)").matches);
+  $('meta[name="theme-color"]').setAttribute("content", dark ? "#1c1a28" : "#f4f2fb");
+}
+
+/* ===================== sheets ===================== */
+function openSheet({ title = "", body = "", tall = false, onMount } = {}) {
+  closeSheet();
+  const bg = document.createElement("div");
+  bg.className = "sheet-bg";
+  bg.innerHTML = `<div class="sheet ${tall ? "tall" : ""}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="grab"></div>
+      <div class="sheet-head"><h3>${esc(title)}</h3><button class="x-btn" data-close aria-label="إغلاق">${ic("x")}</button></div>
+      <div class="sheet-body">${body}</div></div>`;
+  bg.addEventListener("click", e => { if (e.target === bg || e.target.closest("[data-close]")) closeSheet(); });
+  $("#layer").appendChild(bg);
+  const sheet = $(".sheet", bg);
+  onMount && onMount(sheet);
+  return sheet;
+}
+function closeSheet() { $$(".sheet-bg").forEach(x => x.remove()); }
+
+/* ===================== auth screens ===================== */
+function screen(html) {
+  closeSheet();
+  $("#layer").innerHTML = `<div class="screen" id="screen"><div class="inner">${html}</div></div>`;
+  $("#nav").hidden = true; $("#fab").hidden = true;
+  return $("#screen");
+}
+function closeScreen() { const s = $("#screen"); if (s) s.remove(); }
+
+function showWelcome() {
+  const el = screen(`
+    <div class="logo-big">م</div>
+    <h1 class="brand-name">مُدار</h1>
+    <p class="brand-tag">التزاماتك، مصاريفك، وراتبك بمكان واحد</p>
+    <div class="stack" style="margin-top:auto">
+      <button class="btn block" data-go="signup">إنشاء حساب</button>
+      <button class="btn ghost block" data-go="login">عندي حساب، سجّل دخول</button>
+      <button class="btn soft block" data-go="demo">دخول سريع بحساب نورة (للديمو)</button>
+      <button class="btn ghost block" disabled>الدخول عبر نفاذ (قريباً)</button>
+      <p class="muted" style="text-align:center;margin:6px 0 0">بيانات وهمية للهاكاثون</p>
+    </div>`);
+  el.addEventListener("click", async e => {
+    const go = e.target.closest("[data-go]")?.dataset.go;
+    if (go === "signup") showSignup();
+    if (go === "login") showLogin();
+    if (go === "demo") {
+      try { const r = await api("/api/auth/demo", { method: "POST" }); setToken(r.token); await startApp(); }
+      catch (err) { handleError(err); }
     }
-    return data;
-  }
-  function saveToken(value) {
-    token = value || null;
-    try { if (token) localStorage.setItem("mawid_token", token); else localStorage.removeItem("mawid_token"); } catch (_) {}
-  }
-  function toast(message, type = "good", timeout = 3600) {
-    const item = document.createElement("div");
-    item.className = `toast ${type}`;
-    item.textContent = String(message);
-    $("toasts").appendChild(item);
-    window.setTimeout(() => item.remove(), timeout);
-  }
-  function languageForm(kind, n) {
-    const forms = language && language[kind];
-    const value = Number(n);
-    if (!Number.isFinite(value) || !forms) throw new Error("ما قدرنا نحمل صيغ الأعداد. جرّب مرة ثانية.");
-    const key = value === 1 ? "one" : value === 2 ? "two" : value >= 3 && value <= 10 ? "few" : "many";
-    const template = forms[key];
-    if (typeof template !== "string" || !template) throw new Error("ما قدرنا نحمل صيغ الأعداد. جرّب مرة ثانية.");
-    return template.replaceAll("{n}", String(value));
-  }
-  const methodLabel = method => /^bnpl\d+$/.test(String(method)) ? languageForm("payments", Number(String(method).replace("bnpl", ""))) : (METHOD_LABELS[method] || method);
-  const monthLabel = k => k === null || k === undefined ? "بعد أكثر من سنة" : Number(k) === 0 ? "هالشهر" : Number(k) === 1 ? "الشهر الجاي" : Number(k) === 2 ? "بعد شهرين" : `بعد ${Number(k)} شهور`;
-  const dayLabel = d => Number(d) === 0 ? "اليوم" : `بعد ${esc(languageForm("days", d))}`;
-  function showError(error) {
-    const message = String(error?.message || "فيه مشكلة بالاتصال، جرّب مرة ثانية.");
-    if (error?.status === 401 || error?.status === 404 && message === "اربط حسابك البنكي أول.") {
-      saveToken(null);
-      if (apiMode === "production") return showOnboardScreen("ob-production");
-      return showOnboardScreen("ob-connect");
+  });
+}
+
+function backBtn(attr) { return `<button class="back-btn" ${attr}>${ic("back")} رجوع</button>`; }
+
+function legalSheet(kind) {
+  const terms = `<p>مُدار يعطيك معلومات وتنبيهات عن التزاماتك ومصاريفك، وهذي مو استشارة مالية.</p>
+    <p>أنت المسؤول عن قراراتك المالية. العروض المعروضة بالتطبيق تجريبية للتوضيح.</p>
+    <p>تقدر تلغي ربط حسابك البنكي بأي وقت من «حسابي».</p>`;
+  const privacy = `<p>نقرأ عملياتك البنكية بموافقتك، وقراءة فقط. ما نقدر نحوّل ولا ندفع بدون موافقتك من تطبيق البنك.</p>
+    <p>رقم جوالك ما ينحفظ كامل، نحفظ نسخة مشفّرة وآخر 3 أرقام بس.</p>
+    <p>مصاريفك ما تطلع لأي جهة، والمساعد الذكي يشوف إجماليات بس.</p>`;
+  openSheet({ title: kind === "terms" ? "الشروط" : "سياسة الخصوصية", body: `<div class="card" style="line-height:1.9">${kind === "terms" ? terms : privacy}</div>` });
+}
+
+function showSignup() {
+  const el = screen(`
+    ${backBtn('data-act="welcome"')}
+    <h1 class="page-title">إنشاء حساب</h1>
+    <p class="page-sub">بنرسل لك رمز تحقق على جوالك.</p>
+    <form id="f-signup">
+      <label class="field"><span>الاسم</span><input name="name" required minlength="2" maxlength="40" autocomplete="given-name"></label>
+      <label class="field"><span>رقم الجوال</span><input name="phone" required inputmode="tel" placeholder="05XXXXXXXX" dir="ltr" style="text-align:right" autocomplete="tel" value="${esc(S.lastPhone)}"></label>
+      <label class="field"><span>الإيميل (اختياري)</span><input name="email" type="email" dir="ltr" style="text-align:right" autocomplete="email"></label>
+      <label class="check"><input type="checkbox" name="terms" required>
+        <span>أوافق على <a href="#" data-legal="terms">الشروط</a> و<a href="#" data-legal="privacy">سياسة الخصوصية</a></span></label>
+      <button class="btn block" type="submit">أرسل الرمز</button>
+    </form>`);
+  el.addEventListener("click", e => {
+    if (e.target.closest('[data-act="welcome"]')) showWelcome();
+    const legal = e.target.closest("[data-legal]");
+    if (legal) { e.preventDefault(); legalSheet(legal.dataset.legal); }
+  });
+  $("#f-signup").addEventListener("submit", async e => {
+    e.preventDefault();
+    const f = e.target;
+    S.lastPhone = f.phone.value.trim();
+    try {
+      const r = await api("/api/auth/signup", { method: "POST", body: {
+        name: f.name.value.trim(), phone: S.lastPhone, email: f.email.value.trim() || null, accept_terms: f.terms.checked } });
+      S.demoCode = r.demo_code || ""; S.authFlow = "signup";
+      showOtp();
+    } catch (err) {
+      if (err.status === 409) { toast(esc(err.message)); showLogin(); return; }
+      handleError(err);
     }
-    toast(message, "error");
+  });
+}
+
+function showLogin() {
+  const el = screen(`
+    ${backBtn('data-act="welcome"')}
+    <h1 class="page-title">تسجيل الدخول</h1>
+    <p class="page-sub">اكتب رقم جوالك ونرسل لك رمز.</p>
+    <form id="f-login">
+      <label class="field"><span>رقم الجوال</span><input name="phone" required inputmode="tel" placeholder="05XXXXXXXX" dir="ltr" style="text-align:right" autocomplete="tel" value="${esc(S.lastPhone)}"></label>
+      <button class="btn block" type="submit">أرسل الرمز</button>
+    </form>
+    <p class="muted" style="margin-top:14px">حساب الديمو: 0500000123</p>`);
+  el.addEventListener("click", e => { if (e.target.closest('[data-act="welcome"]')) showWelcome(); });
+  $("#f-login").addEventListener("submit", async e => {
+    e.preventDefault();
+    S.lastPhone = e.target.phone.value.trim();
+    try {
+      const r = await api("/api/auth/login", { method: "POST", body: { phone: S.lastPhone } });
+      S.demoCode = r.demo_code || ""; S.authFlow = "login";
+      showOtp();
+    } catch (err) { handleError(err); }
+  });
+}
+
+function showOtp() {
+  const last = S.lastPhone.replace(/\D/g, "").slice(-3);
+  const el = screen(`
+    ${backBtn('data-act="change"')}
+    <h1 class="page-title">أدخل الرمز</h1>
+    <p class="page-sub">أرسلناه لـ <span dir="ltr">05XX XXX ${esc(last)}</span></p>
+    ${S.demoCode ? `<div class="alert good">رمزك التجريبي: <b class="num" dir="ltr">${esc(S.demoCode)}</b></div>`
+      : `<div class="alert warn">إذا الرقم مسجل بيوصلك رمز. إذا ما عندك حساب، أنشئ واحد.</div>`}
+    <div class="otp" id="otp">${Array.from({ length: 6 }, (_, i) => `<input inputmode="numeric" maxlength="1" aria-label="الرقم ${i + 1}" autocomplete="${i ? "off" : "one-time-code"}">`).join("")}</div>
+    <button class="btn block" id="verify">تأكيد</button>
+    <div class="btn-row" style="justify-content:space-between;margin-top:14px">
+      <button class="link-btn" id="resend" disabled>إعادة الإرسال بعد <span id="secs">60</span> ثانية</button>
+      <button class="link-btn" data-act="change">غيّر الرقم</button>
+    </div>`);
+  const boxes = $$("#otp input", el);
+  boxes[0].focus();
+  const code = () => boxes.map(b => b.value).join("");
+  boxes.forEach((b, i) => {
+    b.addEventListener("input", () => {
+      b.value = b.value.replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/\D/g, "").slice(-1);
+      if (b.value && i < 5) boxes[i + 1].focus();
+      if (code().length === 6) verify();
+    });
+    b.addEventListener("keydown", e => { if (e.key === "Backspace" && !b.value && i > 0) boxes[i - 1].focus(); });
+    b.addEventListener("paste", e => {
+      const t = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 6);
+      if (t.length) { e.preventDefault(); t.split("").forEach((d, j) => boxes[j] && (boxes[j].value = d)); if (t.length === 6) verify(); }
+    });
+  });
+  let left = 60;
+  const timer = setInterval(() => {
+    left -= 1; const s = $("#secs"); if (s) s.textContent = left;
+    if (left <= 0) { clearInterval(timer); const r = $("#resend"); if (r) { r.disabled = false; r.textContent = "إعادة الإرسال"; } }
+  }, 1000);
+  let busy = false;
+  async function verify() {
+    if (busy || code().length !== 6) return;
+    busy = true;
+    try {
+      const r = await api("/api/auth/verify", { method: "POST", body: { phone: S.lastPhone, code: code() } });
+      clearInterval(timer);
+      setToken(r.token);
+      if (r.bank_connected) await startApp(); else showBankConnect();
+    } catch (err) {
+      boxes.forEach(b => (b.value = "")); boxes[0].focus();
+      handleError(err);
+    } finally { busy = false; }
   }
-  function stat(label, value, tone = "purple", note = "") {
-    return `<div class="stat tint-${tone}"><div class="stat-label">${label}</div><div class="stat-value">${value}</div>${note ? `<div class="stat-note">${note}</div>` : ""}</div>`;
-  }
-  function empty(title, copy) {
-    return `<div class="empty-state"><strong>${esc(title)}</strong>${esc(copy)}</div>`;
-  }
-  function actionControl(action) {
-    if (!action) return "";
-    if (action.kind === "url" && action.url) {
+  $("#verify").addEventListener("click", verify);
+  el.addEventListener("click", async e => {
+    if (e.target.closest('[data-act="change"]')) { clearInterval(timer); S.authFlow === "signup" ? showSignup() : showLogin(); }
+    if (e.target.closest("#resend") && !$("#resend").disabled) {
       try {
-        const link = new URL(action.url);
-        if (link.protocol !== "https:") return "";
-        return `<a class="small-action" href="${esc(link.href)}" target="_blank" rel="noopener noreferrer">${esc(action.label || "افتح جهة التمويل")}</a>`;
-      } catch (_) { return ""; }
+        const r = await api("/api/auth/login", { method: "POST", body: { phone: S.lastPhone } });
+        S.demoCode = r.demo_code || S.demoCode; clearInterval(timer); showOtp(); toast("أرسلنا رمز جديد.", "good");
+      } catch (err) { handleError(err); }
     }
-    if (action.kind === "copy" && action.value) return `<button class="small-action" type="button" data-copy="${esc(action.value)}">${esc(action.label || "نسخ رقم السداد")}</button>`;
-    return "";
-  }
-  document.addEventListener("click", async event => {
-    const copy = event.target.closest("[data-copy]");
-    if (!copy) return;
-    try { await navigator.clipboard.writeText(copy.dataset.copy); toast("نسخنا رقم السداد"); }
-    catch (_) { toast(`رقم السداد: ${copy.dataset.copy}`, "good", 6000); }
   });
+}
 
-  function route() {
-    if (!started) return;
-    const id = (location.hash || "#overview").slice(1);
-    const page = PAGES.includes(id) ? id : "overview";
-    document.querySelectorAll(".page").forEach(section => section.classList.toggle("active", section.id === `p-${page}`));
-    document.querySelectorAll("[data-page]").forEach(link => {
-      if (link.dataset.page === page) link.setAttribute("aria-current", "page");
-      else link.removeAttribute("aria-current");
-    });
-    window.scrollTo({ top: 0, behavior: "instant" });
-    const loaders = { overview: loadOverview, expenses: loadExpenses, obligations: loadObligations, buy: loadOffers, account: loadAccount, wish: loadWishlist, subscriptions: loadSubscriptions };
-    const section = $(`p-${page}`);
-    section.querySelectorAll(".screen-error,.screen-loading").forEach(node => node.remove());
-    const loading = document.createElement("div");
-    loading.className = "screen-loading";
-    loading.setAttribute("aria-label", "لحظة، نحمل بياناتك");
-    loading.innerHTML = "<i></i><i></i>";
-    section.prepend(loading);
-    Promise.resolve(loaders[page]?.()).then(() => loading.remove()).catch(error => {
-      loading.remove();
-      if (error.status === 401 || error.status === 404) return showError(error);
-      const panel = document.createElement("div");
-      panel.className = "screen-error";
-      const text = document.createElement("p");
-      text.textContent = error.message || "فيه مشكلة بالاتصال.";
-      const retry = document.createElement("button");
-      retry.type = "button"; retry.className = "button secondary"; retry.dataset.retryPage = page; retry.textContent = "حاول مرة ثانية";
-      panel.append(text, retry);
-      section.prepend(panel);
-    });
-  }
-  $("main-content").addEventListener("click", event => {
-    if (event.target.closest("[data-retry-page]")) route();
+/* ===================== bank connection (onboarding) ===================== */
+function showBankConnect() {
+  const banks = [["demo1", "بنك تجريبي أ"], ["demo2", "بنك تجريبي ب"], ["demo3", "بنك تجريبي ج"]];
+  let picked = null;
+  const el = screen(`
+    <div class="logo-big" style="margin-top:10px;width:64px;height:64px;font-size:30px;border-radius:20px">م</div>
+    <h1 class="page-title" style="text-align:center">اربط حسابك مرة وحدة</h1>
+    <p class="page-sub" style="text-align:center">نقرأ عملياتك عشان نلقى التزاماتك ونفهم مصاريفك. ما نقدر نحوّل ولا ندفع.</p>
+    <div id="banks">${banks.map(([id, n]) => `<button class="bank" data-bank="${id}" aria-pressed="false"><span class="ico">${ic("bank")}</span>${n}</button>`).join("")}</div>
+    <div class="card tight">
+      <h2>وش اللي بتوافق عليه</h2>
+      <ul class="perm">
+        <li><span class="teal">✓</span>قراءة الحسابات والرصيد</li>
+        <li><span class="teal">✓</span>قراءة العمليات لآخر 12 شهر</li>
+        <li><span class="red">✕</span>التحويل أو الدفع من حسابك</li>
+        <li><span class="teal">✓</span>تقدر تلغي الموافقة بأي وقت، وتنتهي لحالها بعد 90 يوم</li>
+      </ul>
+    </div>
+    <button class="btn block" id="approve" disabled>وافق من تطبيق البنك</button>
+    <button class="link-btn" style="margin:14px auto 0" data-act="logout">تسجيل الخروج</button>`);
+  el.addEventListener("click", async e => {
+    const b = e.target.closest("[data-bank]");
+    if (b) { picked = b.dataset.bank; $$("[data-bank]", el).forEach(x => x.setAttribute("aria-pressed", x === b)); $("#approve").disabled = false; }
+    if (e.target.closest('[data-act="logout"]')) logout();
+    if (e.target.closest("#approve") && picked) connect(picked);
   });
-  window.addEventListener("hashchange", route);
-  $("open-wishlist").addEventListener("click", () => { location.hash = "#wish"; });
+}
 
-  async function updateWishCount() {
-    try {
-      const list = await api("/api/wishlist");
-      wishlistCount = Array.isArray(list.items) ? list.items.length : 0;
-      $("wish-count").textContent = wishlistCount > 99 ? "99+" : wishlistCount;
-      $("wish-count").setAttribute("aria-label", "عدد الأمنيات");
-    } catch (error) { if (error.status === 401) showError(error); }
-  }
-  function renderDonut(parts, salary) {
-    const colors = ["#7650d4", "#32877c", "#b8a2ec", "#e4d7bb"];
-    const total = parts.reduce((sum, item) => sum + Math.max(0, item.value), 0) || 1;
-    const circumference = 2 * Math.PI * 55;
-    let offset = 0;
-    const circles = parts.map((item, index) => {
-      const length = circumference * Math.max(0, item.value) / total;
-      const circle = `<circle cx="80" cy="80" r="55" fill="none" stroke="${colors[index]}" stroke-width="17" stroke-dasharray="${Math.max(0,length - 2)} ${circumference}" stroke-dashoffset="${-offset}"/>`;
-      offset += length;
-      return circle;
-    }).join("");
-    $("ov-chart").innerHTML = `<svg viewBox="0 0 160 160" role="img" aria-label="توزيع الراتب"><g transform="rotate(-90 80 80)">${circles}</g><text x="80" y="77" text-anchor="middle" class="chart-center">${format(salary)}</text><text x="80" y="94" text-anchor="middle" class="chart-center-sub">راتبك</text></svg>`;
-    $("ov-legend").innerHTML = parts.map((item, index) => `<div class="legend-item"><i class="legend-dot" style="background:${colors[index]}"></i><span>${esc(item.label)}<strong>${format(item.value)} ر.س</strong></span></div>`).join("");
-  }
-  function alertMarkup(item) {
-    if (item.type === "before_salary") return `<div class="list-row"><div class="row-copy"><div class="row-title">عندك دفعة قبل الراتب</div><div class="row-sub">${(item.plans || []).map(plan => `${esc(plan.name)} · ${dayLabel(plan.days_until)}`).join("، ")}</div></div><span class="badge upcoming">${money(item.amount)}</span></div>`;
-    if (item.type === "plan_ending") return `<div class="list-row"><div class="row-copy"><div class="row-title">خطة ${esc(item.name)} تخلص هالشهر</div><div class="row-sub">يرجع لك ${money(item.frees)} من الشهر الجاي</div></div></div>`;
-    if (item.type === "spending_pace") return `<div class="list-row"><div class="row-copy"><div class="row-title">صرفك وصل ${esc(item.pct)}%</div><div class="row-sub">الراتب ${dayLabel(item.days_to_salary)}</div></div></div>`;
-    return "";
-  }
-  function combinedBudgetWarnings(summary) {
-    const warningAlerts = (summary?.alerts || []).filter(item => typeof item.message === "string" && /budget|essential|personal|أساسي|شخصي|ميزان/i.test(String(item.type || "")));
-    const warnings = [...(summary?.budget?.warnings || []), ...warningAlerts];
-    const unique = new Map();
-    warnings.forEach(item => {
-      const key = item.type || item.message;
-      if (key && !unique.has(key)) unique.set(key, item);
-    });
-    return [...unique.values()];
-  }
-  async function loadOverview() {
-    const [s, w] = await Promise.all([api("/api/summary"), api("/api/wishlist")]);
-    const f = s.formula || {};
-    salaryAmount = number(f.salary);
-    const displayName = s.display_name || "يا هلا";
-    $("overview-title").textContent = `هلا ${displayName}`;
-    $("ov-sub").textContent = `راتبك ${dayLabel(s.salary?.days_left || 0)}`;
-    const totalObligations = number(s.obligations_total ?? f.total_obligations ?? f.obligations);
-    $("ov-stats").innerHTML =
-      stat("راتبك الشهري", money(f.salary), "purple", `ينزل يوم ${format(s.salary?.day)}`) +
-      stat("التزاماتك", money(totalObligations), "sand", "الأقساط والمعيشة") +
-      stat("تقدر تصرف الحين", money(s.available), "teal", `صرفك ${format(s.spent)} ر.س`) +
-      stat("هامش الأمان", money(f.buffer), "rose", "ما نحسبه للصرف");
-    const alerts = Array.isArray(s.alerts) ? s.alerts.map(alertMarkup).filter(Boolean) : [];
-    const warnings = combinedBudgetWarnings(s);
-    $("ov-alerts").innerHTML = alerts.length || warnings.length ? `<article class="surface">${alerts.join("")}${warnings.map(item => `<div class="budget-warning">${esc(item.message || "")}</div>`).join("")}</article>` : "";
-    const spendable = number(s.safe_to_spend);
-    $("ov-formula").innerHTML = `${format(f.salary)} − ${format(totalObligations)} − ${format(f.buffer)} = <strong>${format(spendable)} ر.س</strong>`;
-    $("ov-formula-note").textContent = `بعد التزاماتك وهامش الأمان، هذا المبلغ اللي تقدر تصرفه. صرفت للحين ${format(s.spent)} ر.س.`;
-    const plans = Array.isArray(s.plans) ? s.plans : [];
-    const upcoming = plans.find(plan => plan.status === "upcoming" || plan.status === "late");
-    $("ov-next").innerHTML = upcoming ? `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(upcoming.name)}</div><div class="row-sub">${dayLabel(upcoming.days_until)} · يوم ${format(upcoming.day)} من كل شهر</div></div><div class="row-amount">${money(upcoming.amount)}<div class="row-sub">${upcoming.remaining != null ? `باقي ${esc(languageForm("payments", upcoming.remaining))}` : ""}</div></div></div>` : empty("ما فيه دفعات قريبة", "إذا تأكدت خطة، بتطلع لك هنا.");
-    const essentials = number(f.essentials);
-    renderDonut([
-      { label: "المعيشة", value: essentials }, { label: "الأقساط", value: number(f.obligations) },
-      { label: "تقدر تصرف", value: Math.max(0, spendable) }, { label: "هامش الأمان", value: number(f.buffer) }
-    ], number(f.salary));
-    wishlistCount = Array.isArray(w.items) ? w.items.length : 0;
-    $("wish-count").textContent = wishlistCount > 99 ? "99+" : wishlistCount;
-  }
+async function connect(bankId) {
+  const el = screen(`<div class="spinner"></div><p style="text-align:center" id="load-text">ننتظر موافقتك من تطبيق البنك…</p>`);
+  const steps = ["ننتظر موافقتك من تطبيق البنك…", "نقرأ عملياتك…", "نكتشف التزاماتك ونصنف مصاريفك…"];
+  steps.forEach((s, i) => setTimeout(() => { const t = $("#load-text", el); if (t) t.textContent = s; }, i * 700));
+  try {
+    const [r] = await Promise.all([api("/api/consent", { method: "POST", body: { bank_id: bankId } }), sleep(2100)]);
+    setToken(r.token);
+    showDetected();
+  } catch (err) { showBankConnect(); handleError(err); }
+}
 
-  async function loadExpenses() {
-    $("expense-list").innerHTML = `<p class="quiet">نحمّل مصروفاتك…</p>`;
-    let data, summary;
-    try {
-      [data, summary] = await Promise.all([api("/api/expenses"), api("/api/summary")]);
-    } catch (error) {
-      $("expense-list").innerHTML = `<p class="quiet" role="alert">ما قدرنا نحمل المصروفات. اضغط تحديث وحاول مرة ثانية.</p>`;
-      $("ex-summary").innerHTML = "";
-      throw error;
-    }
-    $("ex-summary").innerHTML = stat("مصروفاتك المرنة", money(summary.spent), "purple", "من دورة الراتب الحالية") +
-      stat("المتاح قبل الراتب", money(summary.available), summary.available < 0 ? "rose" : "teal", "بعد الالتزامات وهامش الأمان") +
-      stat("متوسط الأساسيات", money(summary.formula.essentials), "sand", "متوسط آخر 3 شهور، مو صرف هالدورة");
-    const categories = Object.entries(summary.categories?.flexible || {}).map(([name, value]) =>
-      `<div class="list-row"><span>${esc(name)}</span><strong>${money(value)}</strong></div>`).join("");
-    $("ex-summary").innerHTML += `<div class="surface" style="grid-column:1/-1"><h2>المرن حسب الفئة</h2>${categories || '<p class="quiet">ما فيه مصروفات مرنة بهالدورة.</p>'}</div>`;
-    const budgetWarnings = combinedBudgetWarnings(summary);
-    if (budgetWarnings.length) $("ex-summary").insertAdjacentHTML("afterbegin", `<div class="surface budget-warning-panel" style="grid-column:1/-1">${budgetWarnings.map(item => `<p class="budget-warning">${esc(item.message || "")}</p>`).join("")}</div>`);
-    expenseToday = summary.today;
-    const dateInput = $("expense-form").elements.date;
-    dateInput.max = expenseToday;
-    if (!dateInput.value) dateInput.value = expenseToday;
-    const items = Array.isArray(data.items) ? data.items : [];
-    $("expense-list").innerHTML = items.length ? items.map(item => {
-      const manual = item.source === "manual" && item.deletable === true;
-      return `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(item.merchant)}</div><div class="row-sub">${esc(item.date || "")} · ${esc(item.category || "غير مصنف")} · ${manual ? "يدوي" : "من البنك، للقراءة بس"}</div>${item.description ? `<div class="row-sub">${esc(item.description)}</div>` : ""}</div><div class="row-amount">${money(item.amount)}${manual ? `<div><button class="danger-action" type="button" data-expense-delete="${esc(item.id)}">حذف</button></div>` : ""}</div></div>`;
-    }).join("") : empty("ما فيه مصروفات مسجلة للحين", "تقدر تضيف مصروفك اليدوي من النموذج فوق.");
-    $("wish-count").textContent = $("wish-count").textContent || "0";
-  }
-  async function createExpense(form) {
-    const fd = new FormData(form);
-    const name = String(fd.get("name") || "").trim();
-    const amountText = String(fd.get("amount") || "").trim();
-    const amount = Number(amountText);
-    const category = String(fd.get("category") || "");
-    const date = String(fd.get("date") || "");
-    const description = String(fd.get("description") || "").trim();
-    if (!name || !/^\d+(?:\.\d{1,2})?$/.test(amountText) || !Number.isFinite(amount) || amount <= 0 || amount > 1000000 || !expenseToday || !date || date > expenseToday) return toast("تأكد من المبلغ والتاريخ. المبلغ بحد أقصى منزلتين عشريتين، والتاريخ مو بعد اليوم بحسابك.", "error");
-    const submit = form.querySelector('button[type="submit"]');
-    if (expenseBusy) return;
-    expenseBusy = true;
-    if (submit) submit.disabled = true;
-    try {
-      await api("/api/expenses", { method: "POST", body: { merchant: name, amount, category, date, description } });
-      toast("أضفنا المصروف.");
-      form.reset();
-      form.elements.date.value = expenseToday;
-      await Promise.all([loadExpenses(), loadOverview()]);
-      return true;
-    } catch (error) { showError(error); return false; }
-    finally { expenseBusy = false; if (submit) submit.disabled = false; }
-  }
-  $("expense-list").addEventListener("click", async event => {
-    const remove = event.target.closest("[data-expense-delete]");
-    if (remove && !deletingExpenses.has(remove.dataset.expenseDelete)) {
-      if (!window.confirm("تحذف هالمصروف؟")) return;
-      remove.disabled = true;
-      deletingExpenses.add(remove.dataset.expenseDelete);
-      try { await api(`/api/expenses/${encodeURIComponent(remove.dataset.expenseDelete)}`, { method: "DELETE" }); toast("حذفنا المصروف."); await Promise.all([loadExpenses(), loadOverview()]); }
-      catch (error) { showError(error); }
-      finally { deletingExpenses.delete(remove.dataset.expenseDelete); remove.disabled = false; }
-      return;
-    }
-  });
-  $("expense-form").addEventListener("submit", event => {
-    const form = event.currentTarget;
-    event.preventDefault();
-    createExpense(form);
-  });
-  $("expense-refresh").addEventListener("click", () => loadExpenses().catch(showError));
-  $("category-form").addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = event.currentTarget, submit = form.querySelector("button");
-    if (submit.disabled) return;
-    submit.disabled = true;
-    try {
-      await api("/api/categories", { method: "POST", body: { merchant: form.elements.merchant.value.trim(), category: form.elements.category.value } });
-      await loadExpenses(); form.reset(); toast("عدّلنا التصنيف.");
-    } catch (error) { showError(error); }
-    finally { submit.disabled = false; }
-  });
-
-  async function loadObligations() {
-    const data = await api("/api/obligations");
-    obligationsCache = data;
-    $("ob-total").textContent = money(data.total);
-    const counts = data.counts || {};
-    $("ob-stats").innerHTML = stat("قادم هالشهر", format(counts.upcoming), "sand") + stat("تسدّد هالشهر", format(counts.paid), "teal");
-    $("ob-list").innerHTML = "";
-    $("living-list").innerHTML = "";
-    const activeItems = Array.isArray(data.active_items) ? data.active_items : (data.items || []).filter(item => item.status !== "completed");
-    const plans = activeItems.filter(item => item.type === "plan" || item.kind === "bnpl" || item.kind === "loan" || item.kind === "recurring" && item.source === "manual");
-    const living = activeItems.filter(item => !plans.includes(item));
-    if (obTab !== "living") {
-      $("ob-list").innerHTML = `<div class="section-heading list-section"><div><span class="eyebrow">الخطط المكتشفة أو المضافة</span><h2>الأقساط</h2></div></div>` + (plans.length ? plans.map(renderPlanCard).join("") : empty("ما عندك أقساط ظاهرة", "إذا عندك التزام يدوي، أضفه من النموذج." ));
-    }
-    if (obTab !== "plans") {
-      const essentials = data.essentials_by_category || {};
-      const categories = Object.entries(essentials).map(([name, amount]) => `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(name)}</div><div class="row-sub">متوسط شهري</div></div><div class="row-amount">${money(amount)}</div></div>`).join("");
-      const bills = living.map(item => renderLivingItem(item)).join("");
-      $("living-list").innerHTML = `<article class="surface"><div class="section-heading"><div><span class="eyebrow">متوسط آخر 3 شهور</span><h2>المعيشة</h2></div></div>${categories || empty("ما فيه متوسطات جاهزة", "بتظهر فئات المعيشة بعد توفر بياناتها.")}</article><article class="surface"><div class="section-heading"><div><span class="eyebrow">للعرض فقط</span><h2>الفواتير الدورية</h2></div></div>${bills || empty("ما فيه فواتير دورية", "الفواتير محسوبة ضمن متوسط المعيشة، ما نضيفها مرة ثانية.")}</article>`;
-    }
-    if (Number(data.hidden_count) > 0) $("ob-list").insertAdjacentHTML("beforeend", `<article class="lock-card"><strong>${esc(data.locked_message || `فيه ${format(data.hidden_count)} التزامات مخفية`)}</strong><p>ترقّ عشان تشوف ${format(data.hidden_count)} التزامات أكثر.</p><a class="button ghost full" href="#subscriptions">ترقية</a></article>`);
-    renderPreviousPayments(data.previous_payments || []);
-  }
-  function statusBadge(status) {
-    const map = { paid: ["paid", "تسدّد هالشهر"], completed: ["paid", "مكتمل"], upcoming: ["upcoming", "قادم"], late: ["late", "متأخر"] };
-    const [style, label] = map[status] || ["upcoming", "قادم"];
-    return `<span class="badge ${style}">${label}</span>`;
-  }
-  function renderPlanCard(plan) {
-    const remains = plan.remaining === null || plan.remaining === undefined ? "التزام شهري" : `باقي ${esc(languageForm("payments", plan.remaining))}`;
-    const progress = Number(plan.progress ?? (plan.total ? (plan.total - plan.remaining) / plan.total * 100 : 0));
-    const pct = Math.max(0, Math.min(100, progress <= 1 ? progress * 100 : progress));
-    const manual = plan.source === "manual";
-    const deleteButton = manual ? `<button class="danger-action" type="button" data-plan-delete="${esc(plan.id)}">حذف</button>` : "";
-    const payAll = plan.pay_all_total != null && Number.isFinite(Number(plan.pay_all_total)) ? `<button class="small-action" type="button" data-plan-pay-all="${esc(plan.id)}" data-pay-amount="${esc(plan.pay_all_total)}" data-pay-reserved="${esc(plan.pay_all_reserved)}" data-pay-gross="${esc(plan.pay_all_gross)}">تسجيل سداد كامل · ${money(plan.pay_all_total)}</button>` : "";
-    return `<article class="item-card">
-      <div class="item-head"><div><div class="item-title">${esc(plan.name)}</div><div class="item-meta">يوم ${format(plan.day)} من كل شهر · ${esc(remains)}</div></div><div>${statusBadge(plan.status)}</div></div>
-      <div class="item-head" style="align-items:end;margin-top:9px"><span class="item-meta">كم ينخصم كل شهر</span><strong class="item-price">${money(plan.amount)}</strong></div>
-      ${plan.total ? `<div class="progress-track" aria-label="التقدم ${Math.round(pct)}%"><span style="width:${pct}%"></span></div><div class="item-meta">${format(number(plan.total) - number(plan.remaining))} من ${esc(languageForm("payments", plan.total))}</div>` : ""}
-      <div class="item-actions">${actionControl(plan.action)}<span>${plan.confirmed ? `<span class="badge sample">مؤكد</span>` : `<button class="small-action" type="button" data-plan-confirm="${esc(plan.id)}">أكد الخطة</button>`} <button class="small-action" type="button" data-plan-edit="${esc(plan.id)}" data-amount="${esc(plan.amount)}" data-remaining="${esc(plan.remaining ?? "")}">تعديل</button> ${payAll} ${deleteButton}</span></div>
-      <form class="stack-form plan-edit-form" data-plan-id="${esc(plan.id)}" data-amount="${esc(plan.amount)}" data-remaining="${esc(plan.remaining ?? "")}" hidden>
-        <p class="quiet">عدّل المبلغ أو الدفعات الباقية. اترك الحقل فاضي إذا ما تبي تغيّره.</p>
-        <div class="form-row">
-          <label>المبلغ الشهري، ر.س<input name="amount" inputmode="decimal" value="${esc(plan.amount)}" aria-label="المبلغ الشهري لخطة ${esc(plan.name)}"></label>
-          ${plan.remaining != null ? `<label>الدفعات الباقية<input name="remaining" inputmode="numeric" value="${esc(plan.remaining)}" aria-label="الدفعات الباقية لخطة ${esc(plan.name)}"></label>` : ""}
-        </div>
-        <div class="item-actions"><button class="button primary" type="submit">احفظ التعديل</button><button class="button secondary" type="button" data-plan-edit-cancel>إلغاء</button></div>
-      </form>
-    </article>`;
-  }
-  function renderPreviousPayments(items) {
-    const html = items.length ? items.map(plan => `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(plan.name)}</div><div class="row-sub">مكتمل${plan.completed_at ? ` · ${esc(dateOnly(plan.completed_at))}` : ""}</div></div><strong>${money(plan.amount)}</strong></div>`).join("") : empty("ما فيه مدفوعات سابقة", "الخطط المكتملة بتظهر هنا.");
-    const archive = $("ob-previous-payments");
-    if (archive) archive.innerHTML = html;
-  }
-  function renderLivingItem(item) {
-    return `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(item.name)}</div><div class="row-sub">${item.due_date ? `تستحق ${esc(item.due_date)}` : item.day ? `يوم ${format(item.day)}` : "فاتورة دورية"} · ${statusBadge(item.status)}</div></div><div class="row-amount">${money(item.amount)}</div></div>`;
-  }
-  $("p-obligations").addEventListener("click", async event => {
-    const tab = event.target.closest("[data-ob-tab]");
-    if (tab) {
-      obTab = tab.dataset.obTab;
-      document.querySelectorAll("[data-ob-tab]").forEach(item => item.setAttribute("aria-selected", String(item === tab)));
-      if (obligationsCache) renderObligationsCached();
-    }
-    const confirmButton = event.target.closest("[data-plan-confirm]");
-    const editButton = event.target.closest("[data-plan-edit]");
-    const deleteButton = event.target.closest("[data-plan-delete]");
-    const payAllButton = event.target.closest("[data-plan-pay-all]");
-    if (payAllButton) {
-      const amount = toNum(payAllButton.dataset.payAmount);
-      const reserved = toNum(payAllButton.dataset.payReserved);
-      const explanation = reserved > 0 ?
-        `الإجمالي ${money(payAllButton.dataset.payGross)}، منها ${money(reserved)} محسوبة ضمن التزاماتك هالشهر. المبلغ الإضافي ${money(amount)}، وبنخصمه من المتاح الحين.` :
-        `المبلغ ${money(amount)} محسوب ضمن التزاماتك هالشهر، وما راح نحسبه مرتين.`;
-      if (!window.confirm(`بنسجّل السداد الكامل. ${explanation} هالتسجيل يحرّر الشهور الجاية، بس ما يحوّل ولا يدفع من بنكك. تبي تكمل؟`)) return;
-      payAllButton.disabled = true;
-      try {
-        await api(`/api/plans/${encodeURIComponent(payAllButton.dataset.planPayAll)}/pay-all`, { method: "POST" });
-        await Promise.all([loadObligations(), loadOverview()]);
-        toast("سجلنا السداد الكامل في موعد.");
-      } catch (error) { showError(error); payAllButton.disabled = false; }
-      return;
-    }
-    if (confirmButton) await confirmPlan(confirmButton.dataset.planConfirm, {}, confirmButton);
-    if (editButton) {
-      const form = editButton.closest(".item-card").querySelector(".plan-edit-form");
-      form.hidden = false;
-      form.elements.amount.focus();
-    }
-    const cancelButton = event.target.closest("[data-plan-edit-cancel]");
-    if (cancelButton) {
-      const form = cancelButton.closest(".plan-edit-form");
-      form.reset();
-      form.hidden = true;
-      form.closest(".item-card").querySelector("[data-plan-edit]").focus();
-    }
-    if (deleteButton) {
-      if (!window.confirm("تحذف الالتزام اليدوي؟")) return;
-      deleteButton.disabled = true;
-      try { await api(`/api/plans/${encodeURIComponent(deleteButton.dataset.planDelete)}`, { method: "DELETE" }); await loadObligations(); toast("حذفنا الالتزام."); }
-      catch (error) { showError(error); deleteButton.disabled = false; }
-    }
-  });
-  $("p-obligations").addEventListener("submit", async event => {
-    const form = event.target.closest(".plan-edit-form");
-    if (!form) return;
-    event.preventDefault();
-    if (form.querySelector('[type="submit"]').disabled) return;
-    const body = {};
-    const parse = value => Number(value.replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)));
-    const amountText = form.elements.amount.value.trim();
-    if (amountText) {
-      const amount = parse(amountText);
-      if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000) return toast("اكتب المبلغ صح.", "error");
-      if (amount !== Number(form.dataset.amount)) body.amount = amount;
-    }
-    const remainingText = form.elements.remaining?.value.trim() || "";
-    if (remainingText) {
-      const remaining = parse(remainingText);
-      if (!Number.isInteger(remaining) || remaining < 0 || remaining > 600) return toast("اكتب عدد الدفعات صح.", "error");
-      if (remaining !== Number(form.dataset.remaining)) body.remaining = remaining;
-    }
-    if (!Object.keys(body).length) return toast("ما غيّرت شي في الخطة.");
-    await confirmPlan(form.dataset.planId, body, form.querySelector('[type="submit"]'));
-  });
-  function renderObligationsCached() {
-    const data = obligationsCache;
-    const activeItems = Array.isArray(data.active_items) ? data.active_items : (data.items || []).filter(item => item.status !== "completed");
-    const plans = activeItems.filter(item => item.type === "plan" || ["bnpl","loan","recurring"].includes(item.kind) && item.source === "manual");
-    const living = activeItems.filter(item => !plans.includes(item));
-    $("ob-list").innerHTML = obTab === "living" ? "" : `<div class="section-heading list-section"><div><span class="eyebrow">الخطط المكتشفة أو المضافة</span><h2>الأقساط</h2></div></div>` + (plans.length ? plans.map(renderPlanCard).join("") : empty("ما عندك أقساط ظاهرة", "إذا عندك التزام يدوي، أضفه من النموذج."));
-    if (obTab !== "living" && Number(data.hidden_count) > 0) $("ob-list").insertAdjacentHTML("beforeend", `<article class="lock-card"><strong>${esc(data.locked_message || `فيه ${format(data.hidden_count)} التزامات مخفية`)}</strong><p>ترقّ عشان تشوف ${format(data.hidden_count)} التزامات أكثر.</p><a class="button ghost full" href="#subscriptions">ترقية</a></article>`);
-    if (obTab === "plans") { $("living-list").innerHTML = ""; return; }
-    const categories = Object.entries(data.essentials_by_category || {}).map(([name, amount]) => `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(name)}</div><div class="row-sub">متوسط شهري</div></div><div class="row-amount">${money(amount)}</div></div>`).join("");
-    $("living-list").innerHTML = `<article class="surface"><div class="section-heading"><div><span class="eyebrow">متوسط آخر 3 شهور</span><h2>المعيشة</h2></div></div>${categories || empty("ما فيه متوسطات جاهزة", "بتظهر فئات المعيشة بعد توفر بياناتها.")}</article><article class="surface"><div class="section-heading"><div><span class="eyebrow">للعرض فقط</span><h2>الفواتير الدورية</h2></div></div>${living.length ? living.map(renderLivingItem).join("") : empty("ما فيه فواتير دورية", "الفواتير محسوبة ضمن متوسط المعيشة، ما نضيفها مرة ثانية.")}</article>`;
-  }
-  $("plan-form").addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = event.currentTarget, button = form.querySelector("button");
-    if (planBusy) return;
-    const amount = toNum(form.elements.amount.value), day = Number(form.elements.day.value);
-    const remainingText = form.elements.remaining.value.trim();
-    if (!amount || !Number.isInteger(day) || day < 1 || day > 28) return toast("راجع المبلغ ويوم الاستحقاق.", "error");
-    const body = { name: form.elements.name.value.trim(), amount, day, kind: form.elements.kind.value, remaining: remainingText ? Number(remainingText) : null };
-    if (remainingText && (!Number.isInteger(body.remaining) || body.remaining < 1 || body.remaining > 600)) return toast("اكتب عدد الدفعات صح.", "error");
-    planBusy = true; button.disabled = true;
-    try { await api("/api/plans", { method: "POST", body }); form.reset(); await Promise.all([loadObligations(), loadOverview()]); toast("أضفنا الالتزام."); }
-    catch (error) { showError(error); }
-    finally { planBusy = false; button.disabled = false; }
-  });
-  async function confirmPlan(id, body, button) {
-    if (planBusy) return;
-    planBusy = true; if (button) button.disabled = true;
-    try { await api(`/api/plans/${encodeURIComponent(id)}/confirm`, { method: "POST", body }); await Promise.all([loadObligations(), loadOverview()]); toast(Object.keys(body).length ? "عدّلنا الخطة وأكدناها." : "أكدنا الخطة."); }
-    catch (error) { showError(error); if (button) button.disabled = false; }
-    finally { planBusy = false; }
-  }
-
-  function showPlannerLock(message = "") {
-    plannerResult = null;
-    $("buy-scenarios").innerHTML = `<article class="lock-card"><span class="lock-mark" aria-hidden="true">ق</span><strong>المخطط ضمن باقات بلس وبريميوم</strong><p>${esc(message || "ترقّ عشان تستخدم محاكاة الالتزامات.")}</p><a class="button primary full" href="#subscriptions">ترقية</a></article>`;
-    $("save-plan").innerHTML = "";
-  }
-  async function plannerEntitled() {
-    if (typeof accountCache?.entitlements?.planner === "boolean") return accountCache.entitlements.planner;
-    const currentId = subscriptionCache?.current?.id;
-    const currentTier = (subscriptionCache?.tiers || []).find(tier => tier.id === currentId);
-    if (typeof currentTier?.planner === "boolean") return currentTier.planner;
-    const account = await api("/api/account");
-    accountCache = account;
-    return typeof account.entitlements?.planner === "boolean" ? account.entitlements.planner : null;
-  }
-  async function loadOffers() {
-    let canUsePlanner;
-    try { canUsePlanner = await plannerEntitled(); }
-    catch (error) {
-      $("buy-scenarios").innerHTML = `<div class="empty-state"><strong>ما قدرنا نتحقق من باقتك</strong><button class="button secondary" type="button" id="offers-retry">حاول مرة ثانية</button></div>`;
-      showError(error);
-      return;
-    }
-    if (canUsePlanner === false) {
-      showPlannerLock();
-      return;
-    }
-    const price = toNum($("buy-price").value);
-    const rawMonths = Number($("buy-target-months").value || 3);
-    const targetMonths = Number.isInteger(rawMonths) && rawMonths >= 1 && rawMonths <= 36 ? rawMonths : 3;
-    if (!price || price > 10000000) {
-      plannerResult = null;
-      $("buy-scenarios").innerHTML = empty("اكتب سعر المنتج", "نقارن لك الطرق بعد ما تدخل السعر.");
-      $("save-plan").innerHTML = "";
-      return;
-    }
-    $("buy-scenarios").innerHTML = `<div class="item-card"><div class="skeleton-block"></div><div class="row-sub">لحظة، نحسب الخيارات…</div></div>`;
-    try {
-      const [result, summary] = await Promise.all([api("/api/offers", { method: "POST", body: { price, target_months: targetMonths } }), api("/api/summary")]);
-      salaryAmount = number(summary.formula?.salary);
-      plannerResult = result;
-      const bestOffer = (result.offers || []).find(offer => offer.id === result.best_offer_id);
-      chosenMethod = bestOffer?.method || (result.offers || [])[0]?.method || "save";
-      renderOffers(result, price);
-    } catch (error) {
-      if (error.status === 403) {
-        showPlannerLock(error.message);
-      } else {
-        $("buy-scenarios").innerHTML = `<div class="empty-state"><strong>ما قدرنا نحسبها</strong><button class="button secondary" type="button" id="offers-retry">حاول مرة ثانية</button></div>`;
-        showError(error);
+async function showDetected() {
+  const data = await api("/api/plans");
+  const plans = data.plans.filter(p => p.remaining !== 0);
+  const render = () => {
+    const el = screen(`
+      <h1 class="page-title">لقينا ${counted(plans.length).replace("دفعة وحدة", "التزام واحد").replace("دفعتين", "التزامين").replace("دفعات", "التزامات").replace("دفعة", "التزام")}</h1>
+      <p class="page-sub">أكّد كل وحدة بضغطة. لو فيه شي غلط، عدّله من صفحة الالتزامات.</p>
+      <div class="card tight">${plans.map(p => `<div class="row">
+        <div class="l"><span class="ico">${ic("card")}</span><div><div class="t">${esc(p.name)}</div>
+        <div class="s">${p.total ? `${p.total} × ${fmt(p.amount)}، باقي ${counted(p.remaining)}` : `${fmt(p.amount)} شهرياً`}، يوم ${p.day}</div></div></div>
+        ${p.confirmed ? `<span class="badge b-paid">${ic("check", "icon")}مؤكد</span>` : `<button class="btn soft sm" data-confirm="${esc(p.id)}">صح</button>`}</div>`).join("")}</div>
+      <button class="btn block" id="done" ${plans.some(p => !p.confirmed) ? "disabled" : ""}>تمام، ودّني للرئيسية</button>`);
+    el.addEventListener("click", async e => {
+      const c = e.target.closest("[data-confirm]");
+      if (c) {
+        try { await api(`/api/plans/${encodeURIComponent(c.dataset.confirm)}/confirm`, { method: "POST", body: {} });
+          plans.find(p => p.id === c.dataset.confirm).confirmed = true; render(); }
+        catch (err) { handleError(err); }
       }
-    }
-  }
-  function saveCard(save, price) {
-    const progress = Array.isArray(save.progress) ? save.progress : [];
-    const months = Number(save.required_months ?? save.months ?? progress.length ?? 0);
-    const pct = number(save.salary_pct ?? (salaryAmount ? number(save.monthly) / salaryAmount * 100 : 0));
-    const rows = progress.map(step => `<li><b>${esc(step.label || monthLabel(step.k))}:</b> ${money(step.amount)} · المجموع ${money(step.cumulative)}</li>`).join("");
-    const reachable = save.reachable_in_target;
-    const warning = save.warning || (!reachable && reachable !== null ? `الهدف يحتاج ${format(months)} شهور على الأقل.` : "");
-    const buttons = reachable === false ? `<div class="save-options"><button class="small-action" type="button" data-set-months="${esc(months)}">خلّها ${format(months)} شهور</button><button class="small-action" type="button" data-max-target="${esc(save.max_target)}">عدّل السعر إلى ${money(save.max_target)}</button></div>` : "";
-    return `<article class="offer-card save-card">
-      <div class="offer-title">تجمع أول</div><div class="offer-subtitle">خطة ادخار على قد وضعك</div>
-      <div class="offer-price">${money(save.monthly)} <small>شهريًا · ${format(pct)}% من الراتب</small></div>
-      <div class="offer-detail"><span>عدد الشهور</span><b>${format(months)}</b></div>
-      <div class="offer-detail"><span>تقدر تشتريه</span><b>${esc(save.buy_label || monthLabel(save.buyK))}</b></div>
-      <div class="offer-detail"><span>قيمة المنتج</span><b>${money(save.total ?? price)}</b></div>
-      ${warning ? `<p class="budget-warning">${esc(warning)}</p>` : ""}
-      ${rows ? `<ol class="save-progress-list">${rows}</ol>` : ""}
-      ${buttons}
-      <button class="button secondary full" type="button" data-save-wish>أضف للأمنيات</button>
-    </article>`;
-  }
-  function renderOffers(result, price) {
-    const offers = Array.isArray(result.offers) ? result.offers : [];
-    const bestOffer = offers.find(offer => offer.id === result.best_offer_id) || offers[0];
-    const offerCard = (offer, best = false) => {
-      const isBest = offer.id === result.best_offer_id;
-      const method = offer.method || offer.id;
-      const remaining = offer.tight == null ? "ما فيه شهر مناسب" : Number(offer.tight) >= 0 ? `${money(offer.tight)} تبقى في ${monthLabel(offer.tightK)}` : `${money(-Number(offer.tight))} ناقص في ${monthLabel(offer.tightK)}`;
-      const startTight = offer.start_tight == null ? "ما فيه شهر يناسبك بهالطريقة" : Number(offer.start_tight) >= 0 ? `${money(offer.start_tight)} تبقى في ${monthLabel(offer.start_tightK)}` : `${money(-Number(offer.start_tight))} ناقص`;
-      const fitTiming = offer.ok ? "مناسب لك الحين" : offer.earliest == null ? "ما فيه شهر مناسب بهالطريقة" : `يصير مناسب ${esc(offer.earliest_label || monthLabel(offer.earliest))}`;
-      const count = Number(offer.count || 0);
-      const fee = number(offer.fee_pct);
-      const feeCopy = fee ? `رسوم ${format(fee)}%` : "بدون رسوم";
-      return `<button type="button" class="offer-card ${chosenMethod === method ? "selected" : ""} ${best ? "best recommended-offer" : ""}" data-method="${esc(method)}">
-        <div class="offer-title">${esc(offer.provider)} · ${esc(offer.label)}</div><div class="offer-subtitle">${esc(feeCopy)} · عرض تجريبي</div>
-        <div class="offer-price">${money(offer.monthly)} <small>${count ? `× ${esc(languageForm("payments", count))}` : "شهريًا"}</small></div>
-        <div class="offer-detail"><span>الإجمالي</span><b>${money(offer.total)}</b></div>
-        ${number(offer.extra_cost) ? `<div class="offer-detail"><span>زيادة على السعر</span><b>${money(offer.extra_cost)}</b></div>` : ""}
-        <div class="offer-detail"><span>أضيق شهر الحين</span><b>${esc(remaining)}</b></div>
-        <div class="offer-note">${fitTiming} · ${esc(startTight)}</div>
-        ${best ? `<p class="offer-reason">${esc(offer.reason || "هذا الخيار الأنسب حسب وضعك الحالي.")}</p>` : ""}
-      </button>`;
-    };
-    const others = offers.filter(offer => offer !== bestOffer);
-    $("buy-scenarios").innerHTML = bestOffer ? `<div class="recommended-wrap">${offerCard(bestOffer, true)}<button class="button secondary full" id="btn-buy-wish" type="button" data-selected-wish>أضف للأمنيات</button>${others.length ? `<button class="text-link offer-expander" type="button" aria-expanded="false" data-expand-offers>عرض العروض الثانية</button><div class="other-offers" hidden>${others.map(offer => offerCard(offer)).join("")}</div>` : ""}</div>` : empty("ما لقينا خيارات", "جرّب سعرًا ثانيًا.");
-    $("save-plan").innerHTML = result.save ? saveCard(result.save, price) : "";
-    $("buy-scenarios").querySelectorAll("[data-method]").forEach(card => {
-      card.setAttribute("aria-pressed", String(card.dataset.method === chosenMethod));
-      if (card.dataset.method === chosenMethod) card.classList.add("selected");
+      if (e.target.closest("#done")) { location.hash = "#home"; startApp(); }
     });
-  }
-  $("buy-price").addEventListener("input", () => {
-    clearTimeout(offerTimer);
-    offerTimer = setTimeout(() => loadOffers(), 280);
-  });
-  $("buy-target-months").addEventListener("input", () => {
-    clearTimeout(offerTimer);
-    offerTimer = setTimeout(() => loadOffers(), 280);
-  });
-  $("buy-scenarios").addEventListener("click", event => {
-    const expand = event.target.closest("[data-expand-offers]");
-    if (expand) {
-      const panel = $("buy-scenarios").querySelector(".other-offers");
-      panel.hidden = !panel.hidden;
-      expand.setAttribute("aria-expanded", String(!panel.hidden));
-      return;
-    }
-    const card = event.target.closest("[data-method]");
-    if (!card) {
-      if (event.target.id === "offers-retry") loadOffers();
-      return;
-    }
-    chosenMethod = card.dataset.method;
-    document.querySelectorAll("#buy-scenarios .offer-card").forEach(item => {
-      item.classList.toggle("selected", item.dataset.method === chosenMethod);
-      item.setAttribute("aria-pressed", String(item.dataset.method === chosenMethod));
-    });
-  });
-  async function addPlannerWish(method, button) {
-    const price = toNum($("buy-price").value), name = $("buy-name").value.trim();
-    if (!price || !name || !method) return toast("اكتب اسم المنتج وسعره أول.", "error");
-    if (button.disabled) return;
-    button.disabled = true;
-    try { await api("/api/wishlist", { method: "POST", body: { name, price, method } }); await updateWishCount(); toast(`أضفنا ${name} للأمنيات. بنذكّرك إذا صار مناسب.`); location.hash = "#wish"; }
-    catch (error) { showError(error); }
-    finally { button.disabled = false; }
-  }
-  $("buy-scenarios").addEventListener("click", event => {
-    const retry = event.target.closest("#offers-retry");
-    if (retry) loadOffers();
-  });
-  $("save-plan").addEventListener("click", event => {
-    const targetMonths = event.target.closest("[data-set-months]");
-    const maxTarget = event.target.closest("[data-max-target]");
-    const saveWish = event.target.closest("[data-save-wish]");
-    if (targetMonths) { $("buy-target-months").value = targetMonths.dataset.setMonths; loadOffers(); }
-    if (maxTarget) { $("buy-price").value = maxTarget.dataset.maxTarget; loadOffers(); }
-    if (saveWish) addPlannerWish("save", saveWish);
-  });
-  $("buy-scenarios").addEventListener("click", event => {
-    const selected = event.target.closest("[data-method]");
-    if (selected) return;
-    const wishButton = event.target.closest("[data-selected-wish]");
-    if (wishButton) addPlannerWish(chosenMethod, wishButton);
-  });
+  };
+  render();
+}
 
-  function methodOptions() {
-    return METHOD_IDS.map(key => `<option value="${key}">${esc(methodLabel(key))}</option>`).join("");
+async function logout() {
+  try { await api("/api/auth/logout", { method: "POST" }); } catch (_) {}
+  setToken(null); S.chat = []; S.me = null;
+  showWelcome();
+}
+
+/* ===================== app shell ===================== */
+const TABS = [
+  { id: "expenses", label: "المصروفات", icon: "expenses" },
+  { id: "obligations", label: "الالتزامات", icon: "obligations" },
+  { id: "home", label: "الرئيسية", icon: "home", center: true },
+  { id: "planner", label: "المخطط", icon: "planner" },
+  { id: "account", label: "حسابي", icon: "account" }
+];
+const PAGES = { home: renderHome, expenses: renderExpenses, obligations: renderObligations, planner: renderPlanner,
+  account: renderAccount, wishlist: renderWishlist, subscriptions: renderSubscriptions };
+
+async function startApp() {
+  try {
+    S.me = await api("/api/auth/me");
+    const health = await api("/api/health"); S.demo = !!health.demo_mode;
+  } catch (err) { handleError(err); return; }
+  if (!S.me.bank_connected) { showBankConnect(); return; }
+  closeScreen();
+  $("#nav").hidden = false; $("#fab").hidden = false;
+  $("#nav").innerHTML = TABS.map(t => t.center
+    ? `<a href="#home" class="home" data-tab="home"><span class="orb">${ic("home")}</span><span>${t.label}</span></a>`
+    : `<a href="#${t.id}" data-tab="${t.id}">${ic(t.icon)}<span>${t.label}</span></a>`).join("");
+  $("#fab").innerHTML = ic("chat");
+  route();
+}
+
+function route() {
+  if (!S.token || !S.me) return;
+  const id = (location.hash || "#home").slice(1);
+  const page = PAGES[id] ? id : "home";
+  $$("#nav [data-tab]").forEach(a => a.setAttribute("aria-current", a.dataset.tab === page ? "page" : "false"));
+  window.scrollTo(0, 0);
+  $("#view").innerHTML = `<div class="skeleton"></div><div class="skeleton" style="height:90px"></div>`;
+  PAGES[page]().catch(handleError);
+}
+window.addEventListener("hashchange", route);
+function refresh() { route(); }
+
+function topbar(html) { $("#topbar").innerHTML = html; }
+function heartBtn(count = 0, ready = false) {
+  return `<a class="square-btn" href="#wishlist" aria-label="قائمة الأمنيات (${count})">${ic("heart")}${ready ? '<span class="dot"></span>' : ""}</a>`;
+}
+function pageTop(title, count, ready) {
+  topbar(`<div><h1 class="page-title">${esc(title)}</h1></div>${heartBtn(count, ready)}`);
+}
+function backTop(title) {
+  topbar(`<div><button class="back-btn" onclick="history.length > 1 ? history.back() : (location.hash = '#home')">${ic("back")} رجوع</button>
+    <h1 class="page-title">${esc(title)}</h1></div>`);
+}
+async function wishState() {
+  try { const w = await api("/api/wishlist"); return { count: w.items.length, ready: w.items.some(i => i.status && i.status.ok), items: w.items }; }
+  catch (_) { return { count: 0, ready: false, items: [] }; }
+}
+function alertBox(a) {
+  if (a.type === "before_salary") return { cls: "warn", icon: "alert", text: `عندك ${a.plans.length === 1 ? "دفعة" : counted(a.plans.length)} (${money(a.amount)}) قبل نزول راتبك: ${a.plans.map(p => `${esc(p.name)} ${whenDays(p.days_until)}`).join("، ")}.` };
+  if (a.type === "plan_ending") return { cls: "good", icon: "check", text: `<b>خبر حلو:</b> ${esc(a.name)} تخلص هالشهر، يعني يرجع لك ${money(a.frees)} من الشهر الجاي.` };
+  if (a.type === "spending_pace") return { cls: "warn", icon: "clock", text: `صرفت ${a.pct}% من اللي تقدر تصرفه، والراتب ${whenDays(a.days_to_salary)}.` };
+  if (a.type === "personal_budget_exceeded") return { cls: "bad", icon: "alert", text: esc(a.message) };
+  if (a.message) return { cls: "warn", icon: "alert", text: esc(a.message) };
+  return null;
+}
+const alertsHtml = list => list.map(alertBox).filter(Boolean).map(a => `<div class="alert ${a.cls}">${ic(a.icon)}<div>${a.text}</div></div>`).join("");
+
+/* ===================== HOME ===================== */
+async function renderHome() {
+  const [s, w] = await Promise.all([api("/api/summary"), wishState()]);
+  const days = s.salary.days_left;
+  topbar(`<div class="who"><span class="avatar">${esc((s.display_name || "م").trim().charAt(0))}</span>
+      <div><b>هلا ${esc(s.display_name || "")}</b><small>${days <= 0 ? "الراتب اليوم" : `الراتب بعد ${counted(days, "days")}`}</small></div></div>
+    ${heartBtn(w.count, w.ready)}`);
+
+  const safe = Math.max(0, s.safe_to_spend), avail = s.available;
+  const pct = safe > 0 ? Math.max(0, Math.min(1, avail / safe)) : 0;
+  const R = 96, C = 2 * Math.PI * R;
+  const before = s.alerts.find(a => a.type === "before_salary");
+  const ending = s.alerts.find(a => a.type === "plan_ending");
+  const next = s.plans.find(p => p.status === "upcoming");
+
+  const card1 = before
+    ? `<div class="card tight small-card tap" data-act="pay"><span class="dot-label amber">قبل الراتب</span>
+        <div><div class="big">${money(before.amount)}</div><div class="muted">${before.plans.length === 1 ? `دفعة ${esc(before.plans[0].name)}` : counted(before.plans.length)}</div></div></div>`
+    : next
+      ? `<a class="card tight small-card tap" href="#obligations" style="text-decoration:none"><span class="dot-label violet">الدفعة الجاية</span>
+          <div><div class="big">${money(next.amount)}</div><div class="muted">${esc(next.name)}، ${whenDays(next.days_until)}</div></div></a>`
+      : `<div class="card tight small-card"><span class="dot-label teal">ما عليك شي</span><div><div class="big">ولا دفعة</div><div class="muted">قبل الراتب</div></div></div>`;
+  const card2 = ending
+    ? `<a class="card tight small-card tap" href="#obligations" style="text-decoration:none"><span class="dot-label teal">خبر حلو</span>
+        <div><div class="big">${esc(ending.name)} تخلص</div><div class="muted">هالشهر</div></div></a>`
+    : `<a class="card tight small-card tap" href="#obligations" style="text-decoration:none"><span class="dot-label violet">التزاماتك</span>
+        <div><div class="big">${money(s.obligations_total)}</div><div class="muted">شهرياً</div></div></a>`;
+
+  const otherAlerts = s.alerts.filter(a => !["before_salary", "plan_ending"].includes(a.type));
+  const personal = (s.budget.target || []).find(t => t.id === "personal");
+  const cap = personal ? personal.amount : 0;
+  const flex = Object.entries(s.categories.flexible || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const used = cap ? s.spent / cap : 0;
+
+  $("#view").innerHTML = `
+    <section class="card ring-card">
+      <div class="ring">
+        <svg viewBox="0 0 224 224"><circle class="track" cx="112" cy="112" r="${R}" fill="none" stroke-width="18"/>
+          <circle class="fill ${avail < 0 ? "neg" : ""}" cx="112" cy="112" r="${R}" fill="none" stroke-width="18" stroke-linecap="round"
+            stroke-dasharray="${C}" stroke-dashoffset="${C}" data-target="${C * (1 - (avail < 0 ? 1 : pct))}"/></svg>
+        <div class="ring-center"><span class="k">${avail < 0 ? "تعدّيت بـ" : "باقي لك"}</span>
+          <span class="v num ${avail < 0 ? "neg" : ""}">${fmt(Math.abs(avail))}</span>
+          <span class="of">ر.س من <span class="num">${fmt(s.safe_to_spend)}</span></span></div>
+      </div>
+      <p class="ring-foot">صرفت ${money(s.spent)} من مصروفك لهالشهر</p>
+    </section>
+    <div class="grid-2">${card1}${card2}</div>
+    ${otherAlerts.length ? `<section class="card tight">${alertsHtml(otherAlerts)}</section>` : ""}
+    <section class="card">
+      <div class="card-head"><h2>مصروفاتك هالشهر</h2><a class="link-btn" href="#expenses">عرض الكل</a></div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <span class="big">${money(s.spent)}</span><span class="muted">من حدك الشخصي ${money(cap)}</span></div>
+      <div class="bar ${used >= 1 ? "over" : used >= .8 ? "warn" : ""}"><span style="width:${Math.min(100, used * 100)}%"></span></div>
+      <div style="margin-top:10px">${flex.length ? flex.map(([k, v]) => `<div class="row"><span>${esc(k)}</span><span class="r">${money(v)}</span></div>`).join("")
+        : `<div class="empty">ما فيه مصروفات شخصية هالشهر للحين.</div>`}</div>
+    </section>
+    <a class="card tap" href="#obligations" style="display:block;text-decoration:none">
+      <div class="card-head"><h2>التزاماتك الشهرية</h2><span class="big">${money(s.obligations_total)}</span></div>
+      <div class="row"><span class="muted">الراتب</span><span class="r">${money(s.formula.salary)}</span></div>
+      <div class="row"><span class="muted">الالتزامات والإيجار</span><span class="r">− ${money(s.formula.obligations)}</span></div>
+      <div class="row"><span class="muted">المعيشة (متوسط آخر 3 شهور)</span><span class="r">− ${money(s.formula.essentials)}</span></div>
+      <div class="row"><span class="muted">هامش الأمان</span><span class="r">− ${money(s.formula.buffer)}</span></div>
+      <div class="row"><span class="t teal">تقدر تصرف هالشهر</span><span class="r teal">${money(s.safe_to_spend)}</span></div>
+    </a>`;
+  requestAnimationFrame(() => { const f = $(".ring .fill"); if (f) f.style.strokeDashoffset = f.dataset.target; });
+}
+
+/* ===================== EXPENSES ===================== */
+let CATS = null;
+async function categories() {
+  if (!CATS) CATS = (await api("/api/categories")).groups;
+  return CATS;
+}
+function cycleStart(todayIso, salaryDay) {
+  const t = new Date(todayIso + "T00:00:00");
+  const d = new Date(t.getFullYear(), t.getMonth(), salaryDay);
+  if (t.getDate() < salaryDay) d.setMonth(d.getMonth() - 1);
+  return d.toISOString().slice(0, 10);
+}
+async function renderExpenses() {
+  const [ex, s, w] = await Promise.all([api("/api/expenses"), api("/api/summary"), wishState()]);
+  pageTop("المصروفات", w.count, w.ready);
+  const start = cycleStart(s.today, s.salary.day);
+  const items = ex.items.filter(i => i.date >= start && i.date <= s.today && !["installment", "income"].includes(i.category));
+  const personal = (s.budget.target || []).find(t => t.id === "personal") || { amount: 0, pct: 20 };
+  const used = personal.amount ? s.spent / personal.amount : 0;
+  const warns = s.alerts.filter(a => a.type && a.type.startsWith("personal_budget"));
+  const flex = Object.entries(s.categories.flexible || {}).sort((a, b) => b[1] - a[1]);
+  $("#view").innerHTML = `
+    <p class="page-sub">من حسابك البنكي، وتقدر تضيف يدوي.</p>
+    <section class="card">
+      <div class="muted">صرفك الشخصي هالشهر</div>
+      <div class="huge" style="margin:4px 0 10px">${money(s.spent)}</div>
+      <div class="bar ${used >= 1 ? "over" : used >= .8 ? "warn" : ""}"><span style="width:${Math.min(100, used * 100)}%"></span></div>
+      <p class="muted" style="margin:8px 0 0">حدك ${personal.pct}% من راتبك = ${money(personal.amount)}. تقدر تغيّره من «حسابي».</p>
+      ${warns.length ? `<div style="margin-top:12px">${alertsHtml(warns)}</div>` : ""}
+    </section>
+    <button class="btn block" data-act="add-expense" style="margin-bottom:14px">${ic("plus")} أضف مصروف</button>
+    <section class="card">
+      <h2>حسب الفئة</h2>
+      ${flex.length ? flex.map(([k, v]) => `<div class="row"><span>${esc(k)}</span><span class="r">${money(v)}</span></div>`).join("") : `<div class="empty">ما فيه مصروفات شخصية هالشهر للحين.</div>`}
+      <p class="muted" style="margin:10px 0 0">المعيشة (بقالة، وقود، فواتير…) محسوبة ضمن «الالتزامات».</p>
+    </section>
+    <section class="card">
+      <h2>عمليات هالشهر</h2>
+      <p class="muted" style="margin-top:-6px">اضغط على أي عملية من البنك عشان تغيّر تصنيفها، ونتذكره للمرات الجاية.</p>
+      ${items.length ? items.map(i => `<${i.deletable ? "div" : "button"} class="row" ${i.deletable ? "" : `data-recat="${esc(i.merchant)}"`}>
+          <div class="l"><span class="ico ${i.category && i.category.startsWith("essential") ? "t" : ""}">${ic("wallet")}</span>
+          <div><div class="t">${esc(i.merchant)}</div><div class="s"><span class="num">${esc(i.date)}</span> · ${esc(catName(i.category))} · ${i.source === "manual" ? "يدوي" : "من البنك"}</div></div></div>
+          <div style="display:flex;align-items:center;gap:6px"><span class="r">${money(i.amount)}</span>
+          ${i.deletable ? `<button class="x-btn" data-del-exp="${esc(i.id)}" aria-label="حذف">${ic("trash")}</button>` : ""}</div>
+        </${i.deletable ? "div" : "button"}>`).join("") : `<div class="empty">ما فيه مصروفات هالشهر للحين.</div>`}
+    </section>`;
+}
+async function addExpenseSheet() {
+  const groups = await categories();
+  const flex = groups.find(g => g.id === "flexible").items;
+  const sheet = openSheet({ title: "أضف مصروف", body: `
+    <form id="f-exp">
+      <label class="field"><span>وش اشتريت؟</span><input name="name" required maxlength="60" placeholder="مثال: قهوة"></label>
+      <label class="field"><span>المبلغ (ر.س)</span><input name="amount" required inputmode="decimal"></label>
+      <label class="field"><span>التصنيف</span><select name="category">${flex.map(c => `<option value="flexible:${esc(c)}">${esc(c)}</option>`).join("")}</select></label>
+      <button class="btn block" type="submit">أضف</button>
+    </form>` });
+  $("#f-exp", sheet).addEventListener("submit", async e => {
+    e.preventDefault();
+    const f = e.target, amount = toNum(f.amount.value);
+    if (!amount) return toast("اكتب المبلغ صح.", "bad");
+    try {
+      await api("/api/expenses", { method: "POST", body: { name: f.name.value.trim(), amount, category: f.category.value } });
+      closeSheet(); toast("انضاف المصروف، و«تقدر تصرف» اتحدّث.", "good"); refresh();
+    } catch (err) { handleError(err); }
+  });
+}
+async function recategorizeSheet(merchant) {
+  const groups = await categories();
+  const sheet = openSheet({ title: `تصنيف ${merchant}`, body: groups.map(g => `
+      <h2 style="font-size:15px;margin:6px 0 8px">${esc(g.label)}</h2>
+      <div class="btn-row" style="margin-bottom:12px">${g.items.map(c => `<button class="chip" data-cat="${esc(g.id)}:${esc(c)}">${esc(c)}</button>`).join("")}</div>`).join("") });
+  sheet.addEventListener("click", async e => {
+    const b = e.target.closest("[data-cat]"); if (!b) return;
+    try {
+      await api("/api/categories", { method: "POST", body: { merchant, category: b.dataset.cat } });
+      closeSheet(); toast(`تمام، عمليات ${esc(merchant)} الجاية بتنحط في ${esc(catName(b.dataset.cat))}.`, "good"); refresh();
+    } catch (err) { handleError(err); }
+  });
+}
+
+/* ===================== OBLIGATIONS ===================== */
+async function renderObligations() {
+  const [o, due, s, w] = await Promise.all([api("/api/obligations"), api("/api/payments/due"), api("/api/summary"), wishState()]);
+  pageTop("الالتزامات", w.count, w.ready);
+  const today = new Date(s.today + "T00:00:00");
+  const daysTo = iso => Math.round((new Date(iso + "T00:00:00") - today) / 86400000);
+  const plans = o.active_items.filter(i => i.type !== "bill");
+  const bills = o.active_items.filter(i => i.type === "bill");
+  const statusBadge = i => i.status === "paid" ? `<span class="badge b-paid">${ic("check")}تسدّد هالشهر</span>`
+    : i.status === "late" ? `<span class="badge b-late">${ic("alert")}متأخر</span>`
+    : `<span class="badge b-upcoming">${ic("clock")}${whenDays(daysTo(i.due_date))}</span>`;
+  const action = a => !a ? "" : a.kind === "url" && a.url && a.url !== "#"
+    ? `<a class="chip" href="${esc(a.url)}" target="_blank" rel="noopener">${ic("ext")}${esc(a.label)}</a>`
+    : a.kind === "copy" ? `<button class="chip" data-copy="${esc(a.value)}">${ic("copy")}${esc(a.label)}</button>` : "";
+
+  const planCard = p => `<article class="card ob">
+      <div class="top">
+        <div class="l" style="display:flex;gap:12px;align-items:center"><span class="ico">${ic("card")}</span>
+          <div><div class="t" style="font-weight:700">${esc(p.name)}</div><div class="muted">يوم ${p.day} من كل شهر</div></div></div>
+        ${statusBadge(p)}
+      </div>
+      <div class="top" style="align-items:flex-end">
+        <div class="muted">${p.total ? `المدفوع: ${p.total - (p.remaining || 0)} من ${p.total}` : "التزام شهري ثابت"}</div>
+        <div style="text-align:left"><div class="amount">${money(p.amount)}</div>${p.remaining ? `<div class="muted">باقي ${counted(p.remaining)}</div>` : ""}</div>
+      </div>
+      ${p.total ? `<div class="bar v"><span style="width:${p.progress ?? 0}%"></span></div>` : ""}
+      <div class="foot">
+        <label class="switch"><input type="checkbox" data-mode="${esc(p.id)}" ${p.pay_mode === "auto" ? "checked" : ""}>ينسحب تلقائي من البنك</label>
+        <div class="btn-row">${action(p.action)}
+          ${p.confirmed ? "" : `<button class="btn soft sm" data-confirm="${esc(p.id)}">أكّد</button>`}
+          ${p.source === "manual" ? `<button class="x-btn" data-del-plan="${esc(p.id)}" aria-label="حذف">${ic("trash")}</button>` : ""}</div>
+      </div>
+    </article>`;
+
+  const current = `
+    ${plans.map(planCard).join("") || `<div class="card empty">ما فيه التزامات نشطة.</div>`}
+    ${o.hidden_count ? `<section class="card lock">${ic("lock")}<p>${esc(o.locked_message)}</p><a class="btn soft" href="#subscriptions">الباقات</a></section>` : ""}
+    <button class="btn ghost block" data-act="add-plan" style="margin-bottom:14px">${ic("plus")} أضف التزام فاته الربط</button>
+    <section class="card">
+      <div class="card-head"><h2>المعيشة</h2><span class="big">${money(o.essentials_total)}</span></div>
+      <p class="muted" style="margin-top:-6px">متوسط آخر 3 شهور</p>
+      ${Object.entries(o.essentials_by_category || {}).map(([k, v]) => `<div class="row"><span>${esc(k)}</span><span class="r">${money(v)}</span></div>`).join("")}
+      ${bills.length ? `<h2 style="font-size:15px;margin:16px 0 4px">الفواتير الشهرية</h2>
+        ${bills.map(b => `<div class="row"><div class="l"><span class="ico t">${ic("bill")}</span><div><div class="t">${esc(b.name)}</div><div class="s">يوم ${b.day}</div></div></div>
+          <div style="text-align:left"><div class="r">${money(b.amount)}</div>${statusBadge(b)}</div></div>`).join("")}
+        <p class="muted" style="margin:8px 0 0">الفواتير داخل متوسط المعيشة، ما نحسبها مرتين.</p>` : ""}
+    </section>`;
+
+  const previous = o.previous_payments.length ? o.previous_payments.map(p => `<article class="card ob">
+      <div class="top"><div class="l" style="display:flex;gap:12px;align-items:center"><span class="ico t">${ic("check")}</span>
+        <div><div class="t" style="font-weight:700">${esc(p.name)}</div><div class="muted">${p.total ? `خلّصت ${counted(p.total)}` : "خلص"}</div></div></div>
+        <span class="badge b-paid">مكتمل</span></div>
+      ${p.total ? `<div class="muted">مجموع اللي دفعته: ${money(p.total * p.amount)}</div>` : ""}
+    </article>`).join("") : `<div class="card empty">لما يخلص أي التزام بينتقل هنا تلقائياً.</div>`;
+
+  $("#view").innerHTML = `
+    <section class="card">
+      <div class="muted">التزاماتك الشهرية</div>
+      <div class="huge" style="margin:4px 0 8px">${money(o.total)}</div>
+      <div class="row"><span class="muted">الالتزامات والإيجار</span><span class="r">${money(o.plans_total)}</span></div>
+      <div class="row"><span class="muted">المعيشة (متوسط آخر 3 شهور)</span><span class="r">${money(o.essentials_total)}</span></div>
+    </section>
+    <section class="card tight">
+      ${due.payable.length ? `<div class="card-head" style="margin-bottom:10px"><div><div class="t" style="font-weight:700">عليك ${due.payable.length === 1 ? "دفعة وحدة" : counted(due.payable.length)} هالشهر</div>
+        <div class="muted">${due.payable.map(i => esc(i.name)).join("، ")}</div></div></div>
+        <button class="btn block" data-act="pay">ادفع الكل · ${fmt(due.payable_total)} ر.س</button>`
+        : `<div class="alert good">${ic("check")}<div>ما عليك دفعات تدفعها من هنا هالشهر.</div></div>`}
+    </section>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab-ob="current" aria-selected="${S.obTab === "current"}">الالتزامات الحالية</button>
+      <button role="tab" data-tab-ob="previous" aria-selected="${S.obTab === "previous"}">المدفوعات السابقة</button>
+    </div>
+    <div>${S.obTab === "current" ? current : previous}</div>`;
+}
+function addPlanSheet() {
+  const sheet = openSheet({ title: "أضف التزام", body: `
+    <form id="f-plan">
+      <label class="field"><span>الاسم</span><input name="name" required maxlength="60" placeholder="مثال: تمويل أثاث"></label>
+      <label class="field"><span>المبلغ الشهري (ر.س)</span><input name="amount" required inputmode="decimal"></label>
+      <label class="field"><span>يوم السداد (1 إلى 28)</span><input name="day" required inputmode="numeric"></label>
+      <label class="field"><span>كم دفعة باقية؟ (اتركه فاضي لو مستمر)</span><input name="remaining" inputmode="numeric"></label>
+      <label class="field"><span>النوع</span><select name="kind"><option value="loan">تمويل</option><option value="bnpl">تقسيط (تمارا، تابي)</option><option value="recurring">شهري ثابت (إيجار، اشتراك)</option></select></label>
+      <button class="btn block" type="submit">حفظ</button>
+    </form>` });
+  $("#f-plan", sheet).addEventListener("submit", async e => {
+    e.preventDefault();
+    const f = e.target, amount = toNum(f.amount.value), day = toNum(f.day.value), rem = toNum(f.remaining.value);
+    if (!amount || !day || day > 28) return toast("تأكد من المبلغ، ويوم السداد من 1 إلى 28.", "bad");
+    try {
+      await api("/api/plans", { method: "POST", body: { name: f.name.value.trim(), amount, day, remaining: rem || null, kind: f.kind.value } });
+      closeSheet(); toast("انضاف الالتزام، و«تقدر تصرف» اتحدّث.", "good"); refresh();
+    } catch (err) { handleError(err); }
+  });
+}
+
+/* ---------- pay all (simulated open banking payment initiation) ---------- */
+async function paySheet() {
+  let due;
+  try { due = await api("/api/payments/due"); } catch (err) { handleError(err); return; }
+  const chosen = new Set(due.payable.map(i => i.id));
+  const linkBtn = i => i.pay_link ? `<a class="chip" href="${esc(i.pay_link.url)}" target="_blank" rel="noopener">${ic("ext")}${esc(i.pay_link.label)}</a>`
+    : i.action && i.action.kind === "copy" ? `<button class="chip" data-copy="${esc(i.action.value)}">${ic("copy")}انسخ رقم السداد</button>` : "";
+  const step1 = () => {
+    const total = due.payable.filter(i => chosen.has(i.id)).reduce((a, i) => a + i.amount, 0);
+    return `
+      ${due.payable.length ? due.payable.map(i => `<label class="row" style="cursor:pointer">
+          <div class="l"><input type="checkbox" data-pick="${esc(i.id)}" ${chosen.has(i.id) ? "checked" : ""} style="width:22px;height:22px;min-height:0;accent-color:var(--violet)">
+          <div><div class="t">${esc(i.name)}</div><div class="s">${whenDays(i.days_until)}، يوم ${i.day}</div></div></div>
+          <span class="r">${money(i.amount)}</span></label>`).join("") : `<div class="empty">ما فيه دفعات تقدر تدفعها من هنا هالشهر.</div>`}
+      ${due.auto.length ? `<h2 style="font-size:14px;margin:16px 0 4px" class="muted">تنسحب تلقائي من البنك</h2>
+        ${due.auto.map(i => `<div class="row" style="opacity:.6"><div><div class="t">${esc(i.name)}</div>
+          <div class="s">ينسحب تلقائي يوم ${i.day}، ما يحتاج تدفعه</div></div><span class="r">${money(i.amount)}</span></div>`).join("")}` : ""}
+      ${due.link_only.length ? `<h2 style="font-size:14px;margin:16px 0 4px" class="muted">تدفعها من الجهة</h2>
+        ${due.link_only.map(i => `<div class="row"><div><div class="t">${esc(i.name)}</div><div class="s">${money(i.amount)}، ${whenDays(i.days_until)}</div></div>${linkBtn(i)}</div>`).join("")}` : ""}
+      ${due.payable.length ? `<button class="btn block" id="pay-go" style="margin-top:16px" ${total ? "" : "disabled"}>ادفع · ${fmt(total)} ر.س</button>` : ""}
+      <p class="muted" style="text-align:center;margin:10px 0 0">${esc(due.note)}<br>دفع تجريبي للعرض.</p>`;
+  };
+  const sheet = openSheet({ title: "ادفع الكل", body: `<div id="pay-body">${step1()}</div>` });
+  const body = $("#pay-body", sheet);
+  sheet.addEventListener("change", e => {
+    const c = e.target.closest("[data-pick]"); if (!c) return;
+    c.checked ? chosen.add(c.dataset.pick) : chosen.delete(c.dataset.pick);
+    body.innerHTML = step1();
+  });
+  sheet.addEventListener("click", async e => {
+    if (e.target.closest("#pay-go")) {
+      const items = due.payable.filter(i => chosen.has(i.id));
+      const total = items.reduce((a, i) => a + i.amount, 0);
+      body.innerHTML = `<div class="spinner" style="margin-top:30px"></div><p style="text-align:center">بننقلك لتطبيق البنك عشان توافق على الدفع…</p>`;
+      await sleep(1100);
+      body.innerHTML = `<div class="bank-approve">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><span class="ico">${ic("bank")}</span><b>بنك تجريبي</b></div>
+          <p class="muted" style="margin-top:0">مُدار يطلب تحويل هالمبالغ من حسابك للجهات مباشرة:</p>
+          ${items.map(i => `<div class="pay-step"><span>${esc(i.name)}</span><b>${money(i.amount)}</b></div>`).join("")}
+          <div class="pay-step" style="border:0"><span class="t">الإجمالي</span><b class="big">${money(total)}</b></div>
+          <div class="btn-row" style="margin-top:8px"><button class="btn teal" style="flex:1" id="bank-ok">وافق</button><button class="btn ghost" style="flex:1" id="bank-no">رفض</button></div>
+        </div>`;
+    }
+    if (e.target.closest("#bank-no")) { body.innerHTML = step1(); toast("ما تم أي دفع."); }
+    if (e.target.closest("#bank-ok")) {
+      try {
+        const r = await api("/api/payments/pay", { method: "POST", body: { item_ids: [...chosen] } });
+        body.innerHTML = `<div id="steps"></div>`;
+        for (const p of r.paid) {
+          await sleep(500);
+          $("#steps", body).insertAdjacentHTML("beforeend", `<div class="pay-step"><span>تم التحويل لـ${esc(p.name)}</span><span class="teal">${ic("check")}</span></div>`);
+        }
+        await sleep(400);
+        $("#steps", body).insertAdjacentHTML("beforeend", `<div class="alert good" style="margin-top:14px">${ic("check")}<div><b>تم السداد</b> ${money(r.total)} (دفع تجريبي)</div></div>
+          <button class="btn block" data-close style="margin-top:12px">تمام</button>`);
+        refresh();
+      } catch (err) { body.innerHTML = step1(); handleError(err); }
+    }
+  });
+}
+
+/* ===================== PLANNER ===================== */
+async function renderPlanner() {
+  const w = await wishState();
+  pageTop("المخطط", w.count, w.ready);
+  const P = S.planner;
+  $("#view").innerHTML = `
+    <p class="page-sub">قبل لا تشتري، شوف أنسب طريقة على وضعك الحقيقي.</p>
+    <section class="card">
+      <label class="field"><span>وش تبي تشتري؟</span><input id="pl-name" value="${esc(P.name)}" maxlength="60"></label>
+      <div class="grid-2" style="margin:0">
+        <label class="field" style="margin:0"><span>السعر (ر.س)</span><input id="pl-price" value="${esc(P.price)}" inputmode="decimal"></label>
+        <label class="field" style="margin:0"><span>بكم شهر تبي تجمعه؟</span><input id="pl-months" value="${esc(P.months)}" inputmode="numeric" placeholder="اختياري"></label>
+      </div>
+    </section>
+    <div id="pl-out"><div class="skeleton"></div></div>
+    <div id="pl-forecast"></div>`;
+  let t;
+  const update = () => { clearTimeout(t); t = setTimeout(() => plannerResults().catch(handleError), 300); };
+  $("#pl-name").addEventListener("input", e => { P.name = e.target.value; });
+  $("#pl-price").addEventListener("input", e => { P.price = e.target.value; P.chosen = null; update(); });
+  $("#pl-months").addEventListener("input", e => { P.months = e.target.value; update(); });
+  await plannerResults();
+  plannerForecast().catch(() => {});
+}
+
+function offerCard(o, best, chosen) {
+  const fits = o.ok ? `<span class="badge b-paid">يناسبك الحين</span>`
+    : o.earliest !== null ? `<span class="badge b-upcoming">يناسبك ${esc(o.earliest_label)}</span>` : `<span class="badge b-late">ما يناسب ميزانيتك</span>`;
+  const tight = o.ok ? o.tight : o.start_tight;
+  return `<button class="offer ${best ? "best" : ""}" data-offer="${esc(o.id)}" aria-pressed="${chosen}">
+      <div class="top"><div><b>${esc(o.provider)}</b> <span class="muted">${esc(o.label)}</span></div>${best ? `<span class="badge b-paid">الأنسب لك</span>` : fits}</div>
+      ${best ? `<div class="muted">${esc(o.reason)}</div>` : ""}
+      <dl class="kv">
+        <dt>كم ينخصم كل شهر</dt><dd>${money(o.monthly)} × ${o.count}</dd>
+        <dt>التكلفة الكلية</dt><dd>${money(o.total)}${o.extra_cost > 0 ? ` <span class="muted">(+${fmt(o.extra_cost)})</span>` : ""}</dd>
+        ${tight !== null && tight !== undefined ? `<dt>في أضيق شهر</dt><dd>يبقى لك ${money(tight)}</dd>` : ""}
+        ${best ? `<dt>متى تبدأ</dt><dd>${o.ok ? "الحين" : esc(o.earliest_label)}</dd>` : ""}
+      </dl>
+    </button>`;
+}
+
+async function plannerResults() {
+  const P = S.planner, out = $("#pl-out");
+  if (!out) return;
+  const price = toNum(P.price), months = toNum(P.months);
+  if (!price) { out.innerHTML = `<div class="card empty">اكتب السعر عشان نقارن.</div>`; return; }
+  let r;
+  try {
+    r = await api("/api/offers", { method: "POST", body: { price, target_months: months >= 1 && months <= 36 ? Math.round(months) : null } });
+  } catch (err) {
+    if (err.status === 403) {
+      out.innerHTML = `<section class="card lock">${ic("lock")}<h2>${esc(err.message)}</h2><a class="btn soft" href="#subscriptions">شوف الباقات</a></section>`;
+      return;
+    }
+    throw err;
   }
-  async function loadWishlist() {
-    const data = await api("/api/wishlist");
-    const items = Array.isArray(data.items) ? data.items : [];
-    wishlistCount = items.length;
-    $("wish-count").textContent = wishlistCount > 99 ? "99+" : wishlistCount;
-    $("wish-stats").innerHTML = stat("عدد الأمنيات", format(items.length), "purple") + stat("قيمتها كلها", money(items.reduce((sum, item) => sum + number(item.price), 0)), "teal");
-    $("wish-list").innerHTML = items.length ? items.map(item => {
-      const status = item.status || {};
-      const save = item.method === "save";
-      const label = save ? (status.ok ? "جمعت المبلغ، مناسب الحين" : `تقدر تشتريه ${item.when_label || monthLabel(status.whenK)}`) : (status.ok ? "مناسب لك الحين" : status.whenK === null ? "ما يناسبك الحين بهالطريقة" : `يصير مناسب ${item.when_label || monthLabel(status.whenK)}`);
-      const pct = Math.max(0, Math.min(100, number(status.pct)));
-      return `<article class="item-card" data-wish-card="${esc(item.id)}">
-        <div class="item-head"><div><div class="item-title">${esc(item.name)}</div><div class="item-meta">${esc(methodLabel(item.method))}</div></div><button class="danger-action" type="button" data-wish-delete="${esc(item.id)}">حذف</button></div>
-        <div class="item-head" style="align-items:center;margin-top:9px"><span class="badge ${status.ok ? "paid" : "upcoming"}">${esc(label)}</span><strong class="item-price">${money(item.price)}</strong></div>
-        ${save ? `<div class="progress-track"><span style="width:${pct}%"></span></div><div class="item-meta">جمعت ${money(item.saved)} من ${money(item.price)}</div>` : ""}
-        <div class="item-actions"><button class="small-action" type="button" data-wish-compare="${esc(item.id)}" data-name="${esc(item.name)}" data-price="${esc(item.price)}">قارن طرق الشراء</button><button class="small-action" type="button" data-wish-edit="${esc(item.id)}" data-name="${esc(item.name)}" data-price="${esc(item.price)}" data-method="${esc(item.method)}">تعديل</button></div>
-        <form class="wish-edit-form stack-form" data-edit-form="${esc(item.id)}" hidden>
-          <label>الاسم<input name="name" readonly value="${esc(item.name)}"></label>
-          <div class="form-row"><label>السعر<input name="price" type="number" min="1" step="0.01" required value="${esc(item.price)}"></label><label>الطريقة<select name="method">${METHOD_IDS.map(key => `<option value="${key}" ${item.method === key ? "selected" : ""}>${esc(methodLabel(key))}</option>`).join("")}</select></label></div>
-          <button class="button secondary" type="submit">حفظ التعديل</button>
-        </form>
+  const best = r.offers.find(o => o.id === r.best_offer_id);
+  const chosenId = P.chosen && r.offers.some(o => o.id === P.chosen) ? P.chosen : best.id;
+  const chosenOffer = r.offers.find(o => o.id === chosenId) || best;
+  const others = r.offers.filter(o => o.id !== best.id);
+  const sv = r.save;
+  const steps = (sv.progress || []).slice(0, 8);
+  const target = sv.target_months;
+  out.innerHTML = `
+    <h2 style="font-size:16px;margin:4px 0 10px">العرض الأنسب لك</h2>
+    ${offerCard(best, true, chosenId === best.id)}
+    <button class="btn ghost block" data-act="others" style="margin-bottom:12px">${P.others ? "إخفاء العروض الثانية" : `عرض العروض الثانية (${others.length})`}</button>
+    ${P.others ? others.map(o => offerCard(o, false, chosenId === o.id)).join("") : ""}
+    <button class="btn block" data-act="wish-offer" style="margin-bottom:18px">${ic("heart")} أضف للأمنيات (${esc(chosenOffer.provider)}، ${esc(chosenOffer.label.split("،")[0])})</button>
+
+    <section class="card">
+      <div class="card-head"><h2>تجمع أول</h2><span class="badge b-violet">الأقل مخاطرة</span></div>
+      <dl class="kv">
+        <dt>تحوّش هالشهر</dt><dd>${money(sv.monthly)} <span class="muted">(${fmt(sv.salary_pct)}% من راتبك)</span></dd>
+        <dt>بعدها كل شهر</dt><dd>لين ${money(sv.max_monthly)} <span class="muted">(حد الادخار)</span></dd>
+        <dt>متى تقدر تشتريه</dt><dd>${esc(sv.buy_label)}</dd>
+        <dt>التكلفة الكلية</dt><dd>${money(price)} بدون أي رسوم</dd>
+      </dl>
+      ${target ? (sv.reachable_in_target
+        ? `<div class="alert good" style="margin-top:12px">${ic("check")}<div>توصل لهدفك خلال ${counted(target, "months")}.</div></div>`
+        : `<div class="alert warn" style="margin-top:12px">${ic("alert")}<div>${esc(sv.warning || "ما توصل لهدفك بهالمدة.")}<br>
+            الحل: ${sv.required_months ? `تمدد المدة لـ ${counted(sv.required_months, "months")}` : "تمدد المدة"}، أو تخفّض الهدف لـ ${money(sv.max_target)}.</div></div>
+           <div class="btn-row" style="margin-top:8px">${sv.required_months ? `<button class="btn soft sm" data-set-months="${sv.required_months}">خلها ${counted(sv.required_months, "months")}</button>` : ""}
+           <button class="btn soft sm" data-set-price="${Math.floor(sv.max_target)}">خلّ الهدف ${fmt(sv.max_target)}</button></div>`) : ""}
+      ${steps.length ? `<div class="steps">${steps.map(p => `<div class="st"><span>${esc(p.label)}: تحوّش ${money(p.amount)}</span><span class="num">${p.pct}%</span></div>`).join("")}</div>` : ""}
+      <button class="btn soft block" data-act="wish-save" style="margin-top:14px">${ic("heart")} أضف للأمنيات بطريقة «تجمع أول»</button>
+    </section>
+    <p class="muted" style="text-align:center">عروض تجريبية للتوضيح. العروض الحقيقية تجي من الجهات بعد الشراكة.<br>هذي معلومات، مو استشارة مالية.</p>`;
+  out.dataset.chosen = chosenId;
+  out.dataset.methods = JSON.stringify(Object.fromEntries(r.offers.map(o => [o.id, o.method])));
+}
+
+async function plannerForecast() {
+  const box = $("#pl-forecast"); if (!box) return;
+  let data, title;
+  try { data = await api("/api/forecast"); title = "توقعاتك لـ 12 شهر"; }
+  catch (e) {
+    if (e.status !== 403) throw e;
+    try { data = await api("/api/smart-account"); title = "الحساب الذكي: الشهور الجاية"; }
+    catch (e2) {
+      if (e2.status !== 403) throw e2;
+      box.innerHTML = `<section class="card lock">${ic("lock")}<h2>الحساب الذكي مو ضمن باقتك</h2><p class="muted">تعرف كم بيبقى لك بالشهور الجاية ومتى تقدر تشتري.</p><a class="btn soft" href="#subscriptions">شوف الباقات</a></section>`;
+      return;
+    }
+  }
+  box.innerHTML = `<section class="card"><h2>${title}</h2>
+    ${data.months.map(m => `<div class="row"><div><div class="t">${esc(m.label)}</div><div class="s">التزامات ${fmt(m.obligations)}، معيشة ${fmt(m.essentials)}</div></div>
+      <span class="r ${m.available < 0 ? "red" : "teal"}">${money(m.available)}</span></div>`).join("")}
+    <p class="muted" style="margin:10px 0 0">${esc(data.assumption)}</p></section>`;
+}
+
+async function addWishFromPlanner(method) {
+  const P = S.planner, price = toNum(P.price), name = (P.name || "").trim() || "منتج";
+  if (!price) return toast("اكتب السعر أول.", "bad");
+  try {
+    await api("/api/wishlist", { method: "POST", body: { name, price, method } });
+    toast(`انضاف ${esc(name)} للأمنيات (${METHOD[method] || method}). بنذكّرك أول ما يصير مناسب.`, "good");
+    location.hash = "#wishlist";
+  } catch (err) { handleError(err); }
+}
+
+/* ===================== WISHLIST ===================== */
+async function renderWishlist() {
+  backTop("قائمة الأمنيات");
+  const w = await api("/api/wishlist");
+  $("#view").innerHTML = `
+    <p class="page-sub">نذكّرك أول ما يصير الشي مناسب لك.</p>
+    ${w.items.length ? w.items.map(i => {
+      const st = i.status || {};
+      const line = i.smart_locked ? esc(i.when_label)
+        : i.method === "save" ? (st.ok ? "جمعت المبلغ، مناسب الحين" : `توصل للمبلغ ${esc(i.when_label)}`)
+        : st.ok ? "مناسب لك الحين" : st.whenK === null ? "ما يناسب بهالطريقة، جرّب «تجمع أول»" : `يصير مناسب ${esc(i.when_label)}`;
+      return `<article class="card ob">
+        <div class="top"><div class="l" style="display:flex;gap:12px;align-items:center"><span class="ico">${ic("heart")}</span>
+          <div><div class="t" style="font-weight:700">${esc(i.name)}</div><div class="muted">${METHOD[i.method] || esc(i.method)}</div></div></div>
+          <button class="x-btn" data-del-wish="${i.id}" aria-label="حذف">${ic("trash")}</button></div>
+        <div class="top" style="align-items:center"><span class="badge ${st.ok ? "b-paid" : "b-upcoming"}">${ic(st.ok ? "check" : "clock")}${line}</span>
+          <span class="amount">${money(i.price)}</span></div>
+        ${i.method === "save" ? `<div class="bar"><span style="width:${st.pct || 0}%"></span></div>
+          <div class="muted">جمعت ${money(i.saved)} من ${money(i.price)} (${st.pct || 0}%)</div>` : ""}
+        <div class="foot"><button class="chip" data-compare="${i.id}" data-name="${esc(i.name)}" data-price="${i.price}">${ic("planner")}قارن طرق الشراء</button></div>
       </article>`;
-    }).join("") : empty("قائمة الأمنيات فاضية", "أضف اللي على بالك، ونحسب لك متى يناسبك.");
-  }
-  $("wish-form").addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = event.currentTarget, button = form.querySelector("button");
-    const price = toNum(form.elements.price.value), name = form.elements.name.value.trim();
-    if (!price || !name || button.disabled) return;
-    button.disabled = true;
-    try { await api("/api/wishlist", { method: "POST", body: { name, price, method: form.elements.method.value } }); form.reset(); await loadWishlist(); toast("أضفناها لقائمة الأمنيات."); }
-    catch (error) { showError(error); }
-    finally { button.disabled = false; }
-  });
-  $("wish-list").addEventListener("click", async event => {
-    const remove = event.target.closest("[data-wish-delete]");
-    const edit = event.target.closest("[data-wish-edit]");
-    const compare = event.target.closest("[data-wish-compare]");
-    if (remove) {
-      if (!window.confirm("تحذف هالأمنية؟")) return;
-      remove.disabled = true;
-      try { await api(`/api/wishlist/${encodeURIComponent(remove.dataset.wishDelete)}`, { method: "DELETE" }); await loadWishlist(); toast("حذفناها من الأمنيات."); }
-      catch (error) { showError(error); remove.disabled = false; }
-    }
-    if (edit) {
-      const form = document.querySelector(`[data-edit-form="${CSS.escape(edit.dataset.wishEdit)}"]`);
-      form.hidden = !form.hidden;
-    }
-    if (compare) {
-      $("buy-name").value = compare.dataset.name;
-      $("buy-price").value = compare.dataset.price;
-      location.hash = "#buy";
-    }
-  });
-  $("wish-list").addEventListener("submit", async event => {
-    const form = event.target.closest("[data-edit-form]");
-    if (!form) return;
-    event.preventDefault();
-    const button = form.querySelector("button");
-    if (button.disabled) return;
-    const body = { price: toNum(form.elements.price.value), method: form.elements.method.value };
-    if (!body.price) return toast("راجع بيانات الأمنية.", "error");
-    button.disabled = true;
-    try { await api(`/api/wishlist/${encodeURIComponent(form.dataset.editForm)}`, { method: "PATCH", body }); await loadWishlist(); toast("عدّلنا الأمنية."); }
-    catch (error) { showError(error); }
-    finally { button.disabled = false; }
-  });
-  $("btn-next-month").addEventListener("click", async event => {
-    const button = event.currentTarget;
-    if (button.disabled) return;
-    button.disabled = true;
-    try {
-      const result = await api("/api/demo/next-month", { method: "POST" });
-      (result.events || []).forEach((item, index) => window.setTimeout(() => {
-        if (item.type === "salary") toast(`نزل راتبك: ${money(item.amount)}`);
-        else if (item.type === "plan_end") toast(`خلصت خطة ${item.name}. يرجع لك ${money(item.frees)} كل شهر.`);
-        else if (item.type === "wish_affordable") toast(`${item.name} صار مناسب لك ${item.tight !== undefined ? `ويبقى ${money(item.tight)} في أضيق شهر.` : ""}`);
-      }, index * 700));
-      await Promise.all([loadWishlist(), loadOverview()]);
-    } catch (error) { showError(error); }
-    finally { button.disabled = false; }
-  });
+    }).join("") : `<section class="card empty">قائمتك فاضية. خطط لأي شي تبيه من «المخطط» وضيفه هنا.<br><br><a class="btn soft" href="#planner">روح للمخطط</a></section>`}
+    ${S.demo ? `<section class="card" style="text-align:center"><button class="btn teal block" data-act="next-month">انتقل للشهر الجاي</button>
+      <p class="muted" style="margin:8px 0 0">زر للديمو بس، عشان نوري التذكير بدون ما ننتظر شهر.</p></section>` : ""}`;
+}
 
-  function dateOnly(date) { if (!date) return "—"; return String(date).slice(0,10); }
-  let accountCache = null, subscriptionCache = null, budgetCache = null;
-  const budgetColors = ["#7650d4", "#32877c", "#c2a7ed", "#d8b875"];
-  function renderBudgetPie(target, legendId, items, title) {
-    const safeItems = Array.isArray(items) ? items : [];
-    const total = safeItems.reduce((sum, item) => sum + Math.max(0, number(item.amount)), 0);
-    let offset = 0;
-    const circumference = 2 * Math.PI * 46;
-    const circles = safeItems.map((item, index) => {
-      const value = Math.max(0, number(item.amount));
-      const segment = total ? circumference * value / total : 0;
-      const markup = `<circle cx="60" cy="60" r="46" fill="none" stroke="${budgetColors[index % budgetColors.length]}" stroke-width="15" stroke-dasharray="${Math.max(0, segment - 1)} ${circumference}" stroke-dashoffset="${-offset}"/>`;
-      offset += segment;
-      return markup;
-    }).join("");
-    const desc = safeItems.map(item => `${item.label}: ${format(item.amount)} ريال، ${format(item.pct)}٪`).join("؛ ");
-    $(target).innerHTML = `<svg viewBox="0 0 120 120" role="img" aria-label="${esc(title)}. ${esc(desc || "لا توجد بيانات")}"><g transform="rotate(-90 60 60)">${circles}</g><text x="60" y="57" text-anchor="middle" class="chart-center">${format(total)}</text><text x="60" y="73" text-anchor="middle" class="chart-center-sub">ر.س</text></svg>`;
-    $(legendId).innerHTML = safeItems.map((item, index) => `<div class="legend-item"><i class="legend-dot" style="background:${budgetColors[index % budgetColors.length]}"></i><span>${esc(item.label)}<strong>${money(item.amount)} · ${format(item.pct)}٪</strong></span></div>`).join("");
-    $(legendId).insertAdjacentHTML("beforeend", `<table class="chart-data-table"><caption>${esc(title)} — البيانات</caption><thead><tr><th scope="col">البند</th><th scope="col">المبلغ</th><th scope="col">النسبة</th></tr></thead><tbody>${safeItems.map(item => `<tr><th scope="row">${esc(item.label)}</th><td>${money(item.amount)}</td><td>${format(item.pct)}٪</td></tr>`).join("")}</tbody></table>`);
-  }
-  function renderBudget(data) {
-    budgetCache = data;
-    renderBudgetPie("budget-actual-chart", "budget-actual-legend", data.actual || [], "التوزيع الفعلي للراتب");
-    renderBudgetPie("budget-target-chart", "budget-target-legend", data.target || [], "أهداف توزيع الراتب");
-    const targets = data.targets || {};
-    const form = $("budget-form");
-    ["essentials_pct","personal_pct","savings_pct"].forEach(key => { form.elements[key].value = Number(targets[key] ?? ({essentials_pct:70,personal_pct:20,savings_pct:10})[key]); });
-    $("budget-warnings").innerHTML = (data.warnings || []).map(item => `<p class="budget-warning" role="status">${esc(item.message || "")}</p>`).join("");
-  }
-  $("budget-form").addEventListener("input", () => {
-    const form = $("budget-form");
-    const sum = ["essentials_pct","personal_pct","savings_pct"].reduce((total, key) => total + Number(form.elements[key].value || 0), 0);
-    $("budget-total").textContent = `المجموع ${sum}٪`;
-    $("budget-total").classList.toggle("invalid", sum !== 100);
-  });
-  $("budget-form").addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const body = Object.fromEntries(["essentials_pct","personal_pct","savings_pct"].map(key => [key, Number(form.elements[key].value)]));
-    if (Object.values(body).some(value => !Number.isInteger(value) || value < 0 || value > 100) || Object.values(body).reduce((sum, value) => sum + value, 0) !== 100) return toast("لازم تكون النسب أعدادًا صحيحة ومجموعها 100٪.", "error");
-    const button = form.querySelector('[type="submit"]');
-    button.disabled = true;
-    try {
-      renderBudget(await api("/api/budget", { method: "PUT", body }));
-      await Promise.all([loadOverview(), loadExpenses()]);
-      toast("حفظنا أهداف توزيع راتبك.");
-    } catch (error) { showError(error); }
-    finally { button.disabled = false; }
-  });
-  async function renderSmartAccount(entitlements) {
-    const root = $("smart-account");
-    if (!entitlements.smart_account) {
-      root.innerHTML = `<div class="lock-card"><strong>الحساب الذكي ضمن باقات بلس وبريميوم</strong><p>شوف المتاح لك بالأشهر الجاية ومتى تقدر تشتري.</p><a class="button ghost full" href="#subscriptions">ترقية</a></div>`;
-      return;
-    }
-    try {
-      const data = await api("/api/smart-account");
-      const months = data.months || [];
-      const monthMarkup = months.map(item => `<article class="forecast-row"><div><strong>${esc(item.label)}</strong><span>${esc(dateOnly(item.date))}</span></div><strong>${money(item.available ?? item.safe_to_spend)}</strong></article>`).join("");
-      const wishes = (data.wishes || []).map(item => `<div class="list-row"><div class="row-copy"><div class="row-title">${esc(item.name)}</div><div class="row-sub">${esc(item.when_label || "موعد الشراء غير متاح")}</div></div></div>`).join("");
-      root.innerHTML = `${monthMarkup || empty("ما فيه بيانات للأشهر الجاية", "بتظهر هنا بعد توفر البيانات.")}<h3 class="subsection-title">متى تقدر تشتري</h3>${wishes || empty("ما فيه أمنيات", "أضف منتج لقائمة الأمنيات عشان نتابع الوقت المناسب.")}<p class="footnote">${esc(data.assumption || "")}</p>`;
-    } catch (error) { root.innerHTML = `<div class="lock-card"><strong>ما قدرنا نحمل الحساب الذكي</strong><button type="button" class="button secondary full" data-retry-smart>حاول مرة ثانية</button></div>`; }
-  }
-  async function renderForecast(entitlements) {
-    const root = $("forecast");
-    if (!entitlements.forecast) {
-      root.innerHTML = `<div class="lock-card"><strong>التوقعات المالية ضمن باقة بريميوم</strong><p>محاكاة مالية لـ 12 شهر قدّام.</p><a class="button ghost full" href="#subscriptions">ترقية</a></div>`;
-      return;
-    }
-    try {
-      const data = await api("/api/forecast");
-      root.innerHTML = `${(data.months || []).map(item => `<article class="forecast-row"><div><strong>${esc(item.label)}</strong><span>${esc(dateOnly(item.date))}</span></div><div class="forecast-amounts"><span>الراتب ${money(item.salary)}</span><span>الالتزامات ${money(item.obligations)}</span><strong>المتاح ${money(item.available ?? item.safe_to_spend)}</strong></div></article>`).join("") || empty("ما فيه توقعات جاهزة", "بتظهر الأرقام بعد تحميل بياناتك.")}<p class="footnote">${esc(data.assumption || "")}</p>`;
-    } catch (_) { root.innerHTML = `<div class="lock-card"><strong>ما قدرنا نحمل التوقعات</strong><button type="button" class="button secondary full" data-retry-forecast>حاول مرة ثانية</button></div>`; }
-  }
-  async function loadAccount() {
-    const [account, budget, subscriptions] = await Promise.all([api("/api/account"), api("/api/budget"), api("/api/subscriptions")]);
-    accountCache = account;
-    subscriptionCache = subscriptions;
-    renderBudget(budget);
-    const subscription = subscriptions.current || account.subscription || {};
-    const entitlements = account.entitlements || { smart_account: false, forecast: false };
-    $("account-profile").innerHTML = `<article class="surface profile-card"><span class="eyebrow">معلومات حسابك</span><div class="profile-name">${esc(account.display_name || "حسابك")}</div>
-      <div class="profile-line"><span>رقم الجوال</span><strong>${esc(account.phone_masked || "غير متوفر")}</strong></div>
-      <div class="profile-line"><span>الإيميل</span><strong>${esc(account.email || "غير مضاف")}</strong></div>
-      <div class="profile-line"><span>البنك</span><strong>${esc(account.bank_name || "ما فيه بنك مربوط")}</strong></div>
-      <div class="profile-line"><span>انتهاء الموافقة</span><strong>${esc(dateOnly(account.consent_expires_at))}</strong></div>
-      <div class="profile-line"><span>يوم الراتب</span><strong>${account.salary_day ? `يوم ${format(account.salary_day)} من كل شهر` : "غير محدد"}</strong></div>
-      <div class="profile-line"><span>نوع الحساب</span><strong>${account.demo_mode ? "بيانات تجريبية" : "حسابك"}</strong></div></article>`;
-    $("account-plan").innerHTML = `<article class="surface current-plan"><span class="eyebrow">باقتك الحالية</span><div class="plan-title">${esc(subscription.name || "—")}</div><p class="quiet">${subscription.price != null ? `${money(subscription.price)}${number(subscription.price) === 0 ? " · مجانية" : " شهريًا"}` : ""}</p><a class="button ghost full" href="#subscriptions">الباقات</a></article>`;
-    await Promise.all([renderSmartAccount(entitlements), renderForecast(entitlements)]);
-    renderSubscriptions(subscriptionCache);
-    $("contact-channels").innerHTML = `<div class="contact-links">${account.contact?.email ? `<a class="contact-link" href="mailto:${esc(account.contact.email)}">راسلنا بالإيميل</a>` : `<div class="contact-unavailable">الإيميل مو متاح للحين.</div>`}${account.contact?.whatsapp ? `<a class="contact-link" href="${esc(safeWhatsApp(account.contact.whatsapp))}" target="_blank" rel="noopener noreferrer">تواصل معنا بواتساب</a>` : `<div class="contact-unavailable">واتساب مو متاح للحين.</div>`}</div>`;
-    $("demo-tools").innerHTML = apiMode === "demo" && account.demo_mode ? `<article class="surface demo-control"><div class="section-heading"><div><span class="eyebrow">بيئة تجريبية</span><h2>أدوات العرض</h2></div></div><button class="button secondary full" id="btn-reset">ابدأ الديمو من جديد</button></article>` : "";
-    const reset = $("btn-reset");
-    if (reset) reset.addEventListener("click", resetDemo);
-  }
-  async function loadSubscriptions() {
-    subscriptionCache = await api("/api/subscriptions");
-    renderSubscriptions(subscriptionCache);
-  }
-  function renderSubscriptions(data) {
-    const tiers = Array.isArray(data?.tiers) ? data.tiers : [];
-    const current = data?.current || {};
-    const features = [
-      ["obligation_limit", "الالتزامات الشهرية", tier => tier.obligation_limit == null ? "بلا حد" : `${format(tier.obligation_limit)} التزامات`],
-      ["smart_account", "الحساب الذكي", tier => tier.smart_account ? "متاح" : "غير متاح"],
-      ["planner", "المخطط ومحاكاة الالتزامات", tier => tier.planner ? "متاح" : "غير متاح"],
-      ["forecast", "التوقعات المالية لـ 12 شهر", tier => tier.forecast ? "متاح" : "غير متاح"]
-    ];
-    $("subscription-comparison").innerHTML = tiers.length ? `<article class="surface comparison-card"><div class="comparison-current"><span class="eyebrow">باقتك الحالية</span><strong>${esc(current.name || "—")}</strong></div><div class="comparison-scroll"><table class="comparison-table"><thead><tr><th scope="col">الميزة</th>${tiers.map(tier => `<th scope="col">${esc(tier.name)}<small>${tier.price == null ? "" : number(tier.price) === 0 ? "مجانية" : `${money(tier.price)} / شهر`}</small></th>`).join("")}</tr></thead><tbody>${features.map(([key,label,display]) => `<tr><th scope="row">${label}</th>${tiers.map(tier => `<td>${esc(display(tier))}</td>`).join("")}</tr>`).join("")}${tiers.some(tier => Array.isArray(tier.features)) ? `<tr><th scope="row">تشمل</th>${tiers.map(tier => `<td>${(tier.features || []).map(feature => esc(feature)).join("، ") || "—"}</td>`).join("")}</tr>` : ""}</tbody></table></div>${data.demo_mode ? `<p class="quiet">وضع تجريبي — ما فيه أي عملية دفع.</p><div class="tier-switch">${tiers.map(tier => `<button type="button" class="button ${tier.id === current.id ? "primary" : "secondary"}" data-demo-plan="${esc(tier.id)}" ${tier.id === current.id ? 'aria-pressed="true"' : ""}>${esc(tier.name)}</button>`).join("")}</div><p class="quiet">تبديل الباقة (للديمو)</p>` : `<p class="quiet">الباقات المدفوعة قريباً.</p>`}</article>` : empty("ما قدرنا نعرض الباقات", "جرّب تحديث الصفحة بعد شوي.");
-    $("subscription-comparison").querySelectorAll("[data-demo-plan]").forEach(button => button.addEventListener("click", async () => {
-      if (button.disabled) return;
-      button.disabled = true;
-      const plan = button.dataset.demoPlan;
-      try {
-        const updated = await api("/api/demo/subscription", { method: "POST", body: { plan } });
-        subscriptionCache = updated;
-        renderSubscriptions(updated);
-        const account = await api("/api/account");
-        accountCache = account;
-        const entitlements = account.entitlements || {};
-        const currentPlan = updated.current || {};
-        $("account-plan").innerHTML = `<article class="surface current-plan"><span class="eyebrow">باقتك الحالية</span><div class="plan-title">${esc(currentPlan.name || "—")}</div><p class="quiet">${currentPlan.price != null ? `${money(currentPlan.price)}${number(currentPlan.price) === 0 ? " · مجانية" : " شهريًا"}` : ""}</p><a class="button ghost full" href="#subscriptions">الباقات</a></article>`;
-        await Promise.all([renderSmartAccount(entitlements), renderForecast(entitlements), refreshObligations()]);
-        toast("حدّثنا الباقة التجريبية.");
-      } catch (error) { showError(error); button.disabled = false; }
-    }));
-  }
-  async function refreshObligations() {
-    try { await loadObligations(); } catch (_) {}
-  }
-  function safeWhatsApp(value) {
-    const source = String(value || "").trim();
-    try {
-      const url = new URL(source);
-      return url.protocol === "https:" && (url.hostname === "wa.me" || url.hostname.endsWith(".wa.me")) ? url.href : "#";
-    } catch (_) {
-      const digits = source.replace(/\D/g, "");
-      return digits.length >= 8 ? `https://wa.me/${digits}` : "#";
-    }
-  }
-  $("contact-form").addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = event.currentTarget, button = form.querySelector("button");
-    if (button.disabled) return;
-    button.disabled = true;
-    try { await api("/api/contact", { method: "POST", body: { name: form.elements.name.value.trim(), message: form.elements.message.value.trim() } }); form.reset(); toast("وصلتنا رسالتك، شكرًا لك."); }
-    catch (error) { showError(error); }
-    finally { button.disabled = false; }
-  });
-  $("btn-revoke").addEventListener("click", async event => {
-    const button = event.currentTarget;
-    if (!window.confirm("متأكد؟ بنلغي الموافقة ونحذف بيانات حسابك.")) return;
-    button.disabled = true;
-    try { await api("/api/consent", { method: "DELETE" }); clearConversation(); saveToken(null); showOnboardScreen("ob-connect"); toast("ألغينا الموافقة وحذفنا بياناتك."); }
-    catch (error) { showError(error); button.disabled = false; }
-  });
-  async function resetDemo() {
-    if (apiMode !== "demo" || !window.confirm("بنبدأ الديمو من جديد ونمسح البيانات الحالية. نكمل؟")) return;
-    try {
-      const result = await api("/api/demo/reset", { method: "POST" });
-      saveToken(result.token);
-      clearConversation();
-      await startDetection(result);
-    } catch (error) { showError(error); }
-  }
+async function nextMonth() {
+  try {
+    const r = await api("/api/demo/next-month", { method: "POST" });
+    r.events.forEach((ev, i) => setTimeout(() => {
+      if (ev.type === "salary") toast(`<b>نزل راتبك</b> ${money(ev.amount)}`, "good");
+      if (ev.type === "plan_end") toast(`<b>خلص التزام ${esc(ev.name)}.</b> يرجع لك ${money(ev.frees)} كل شهر، وانتقل للمدفوعات السابقة.`, "good", 7000);
+      if (ev.type === "wish_affordable") toast(`<b>خبر حلو:</b> ${esc(ev.name)} صار مناسب لك${ev.tight !== undefined ? `. بـ${METHOD[ev.method] || ""} يبقى لك ${money(ev.tight)} في أضيق شهر.` : "."}`, "good", 9000);
+    }, i * 900));
+    refresh();
+  } catch (err) { handleError(err); }
+}
 
-  /* Persistent assistant sheet; chat nodes stay mounted while closed. */
-  const suggestions = ["كم عليّ هالشهر؟", "أقدر آخذ جوال بـ 3000؟", "ضيف مصروف قهوة 20"];
-  $("chat-suggestions").innerHTML = suggestions.map(text => `<button type="button">${esc(text)}</button>`).join("");
-  function appendMessage(kind, text) {
-    const node = document.createElement("div");
-    node.className = `message ${kind}`;
-    node.textContent = text;
-    $("chat-messages").appendChild(node);
-    $("chat-messages").scrollTop = $("chat-messages").scrollHeight;
-    return node;
-  }
-  function clearConversation() {
-    $("chat-messages").replaceChildren();
-    appendMessage("assistant", "هلا! اسألني عن أقساطك أو مصاريفك أو شي تفكر تشتريه.");
-  }
-  clearConversation();
-  let chatReturnFocus = null;
-  function openChat() {
-    chatReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : $("chat-open");
-    $("app").inert = true;
-    $("app").setAttribute("aria-hidden", "true");
-    $("chat-backdrop").hidden = false;
-    requestAnimationFrame(() => $("chat-backdrop").classList.add("visible"));
-    $("chat-sheet").classList.add("open");
-    $("chat-sheet").setAttribute("aria-hidden", "false");
-    $("chat-open").setAttribute("aria-expanded", "true");
-    document.body.classList.add("sheet-open");
-    $("chat-input").focus({ preventScroll: true });
-  }
-  function closeChat() {
-    $("chat-sheet").classList.remove("open");
-    $("chat-sheet").setAttribute("aria-hidden", "true");
-    $("chat-open").setAttribute("aria-expanded", "false");
-    $("chat-backdrop").classList.remove("visible");
-    document.body.classList.remove("sheet-open");
-    $("app").inert = false;
-    $("app").removeAttribute("aria-hidden");
-    window.setTimeout(() => { if (!$("chat-sheet").classList.contains("open")) $("chat-backdrop").hidden = true; }, 240);
-    const target = chatReturnFocus && chatReturnFocus.isConnected ? chatReturnFocus : $("chat-open");
-    target.focus({ preventScroll: true });
-  }
-  $("chat-open").addEventListener("click", openChat);
-  $("chat-close").addEventListener("click", closeChat);
-  $("chat-backdrop").addEventListener("click", closeChat);
-  document.addEventListener("keydown", event => {
-    if (!$("chat-sheet").classList.contains("open")) return;
-    if (event.key === "Escape") { closeChat(); return; }
-    if (event.key !== "Tab") return;
-    const focusable = [...$("chat-sheet").querySelectorAll('button:not(:disabled),input:not(:disabled),a[href],[tabindex]:not([tabindex="-1"])')].filter(item => item.offsetParent !== null);
-    if (!focusable.length) { event.preventDefault(); return; }
-    const first = focusable[0], last = focusable[focusable.length - 1];
-    if (event.shiftKey && (document.activeElement === first || ! $("chat-sheet").contains(document.activeElement))) {
-      event.preventDefault(); last.focus();
-    } else if (!event.shiftKey && (document.activeElement === last || ! $("chat-sheet").contains(document.activeElement))) {
-      event.preventDefault(); first.focus();
-    }
+/* ===================== ACCOUNT ===================== */
+function donut(parts) {
+  const total = parts.reduce((a, p) => a + Math.max(0, p.value), 0) || 1, r = 52, c = 2 * Math.PI * r;
+  let off = 0;
+  const segs = parts.map(p => {
+    const len = Math.max(0, p.value) / total * c;
+    const s = `<circle r="${r}" cx="70" cy="70" fill="none" stroke="${p.color}" stroke-width="22" stroke-dasharray="${Math.max(0, len - 2)} ${c}" stroke-dashoffset="${-off}"/>`;
+    off += len; return s;
+  }).join("");
+  return `<svg viewBox="0 0 140 140" width="140" height="140" role="img" aria-label="توزيع الراتب"><g transform="rotate(-90 70 70)">${segs}</g></svg>`;
+}
+const BUDGET_COLORS = { essentials: "var(--violet-2)", personal: "var(--teal)", savings: "var(--amber)", remaining: "var(--track)" };
+
+async function renderAccount() {
+  const [a, b, w] = await Promise.all([api("/api/account"), api("/api/budget"), wishState()]);
+  pageTop("حسابي", w.count, w.ready);
+  const theme = document.documentElement.dataset.theme || "dark";
+  const targets = Object.fromEntries((b.target || []).map(t => [t.id, t]));
+  const contact = a.contact || {};
+  $("#view").innerHTML = `
+    <section class="card">
+      <div class="who" style="margin-bottom:12px"><span class="avatar" style="width:52px;height:52px;font-size:22px;border-radius:16px">${esc((a.display_name || "م").charAt(0))}</span>
+        <div><b style="font-size:18px">${esc(a.display_name || "")}</b><small dir="ltr" style="display:block;text-align:right">${esc(a.phone_masked || "")}</small></div></div>
+      ${a.email ? `<div class="row"><span class="muted">الإيميل</span><span dir="ltr">${esc(a.email)}</span></div>` : ""}
+      <div class="row"><span class="muted">البنك المربوط</span><span>${esc(a.bank_name || "—")}</span></div>
+      <div class="row"><span class="muted">تنتهي الموافقة</span><span class="num">${esc((a.consent_expires_at || "").slice(0, 10) || "—")}</span></div>
+      <div class="row"><span class="muted">يوم الراتب</span><span>${a.salary_day} من كل شهر</span></div>
+    </section>
+
+    <a class="card tap" href="#subscriptions" style="display:flex;justify-content:space-between;align-items:center;text-decoration:none">
+      <div><div class="muted">باقتك الحالية</div><div class="big">${esc(a.subscription.name)}</div>
+        <div class="muted">${a.subscription.price ? `${fmt(a.subscription.price)} ر.س شهرياً` : "مجانية"}</div></div>
+      <span class="btn soft sm">الباقات</span></a>
+
+    <section class="card">
+      <div class="card-head"><h2>توزيع راتبك</h2><button class="link-btn" data-act="edit-budget">عدّل الأهداف</button></div>
+      <div class="donut-wrap">${donut(b.actual.map(x => ({ value: x.amount, color: BUDGET_COLORS[x.id] })))}
+        <div class="legend">${b.actual.map(x => `<div class="li"><span><i style="background:${BUDGET_COLORS[x.id]}"></i>${esc(x.label)}</span>
+          <span style="white-space:nowrap"><b class="num">${x.pct}%</b>${targets[x.id] ? ` <span class="muted">هدفك ${targets[x.id].pct}%</span>` : ""}</span></div>`).join("")}</div></div>
+      <p class="muted" style="margin:10px 0 0">الرقم الأول اللي صار فعلاً هالشهر، والثاني هدفك.</p>
+      ${b.warnings.length ? `<div style="margin-top:12px">${alertsHtml(b.warnings)}</div>` : ""}
+    </section>
+
+    <section class="card">
+      <h2>المظهر</h2>
+      <div class="seg">${[["light", "فاتح"], ["dark", "داكن"], ["system", "حسب الجهاز"]].map(([k, l]) => `<button data-theme-set="${k}" aria-pressed="${theme === k}">${l}</button>`).join("")}</div>
+    </section>
+
+    <section class="card">
+      <h2>تواصل معنا</h2>
+      ${contact.email || contact.whatsapp ? `<div class="btn-row" style="margin-bottom:12px">
+        ${contact.email ? `<a class="chip" href="mailto:${esc(contact.email)}">${ic("ext")}الإيميل</a>` : ""}
+        ${contact.whatsapp ? `<a class="chip" href="https://wa.me/${esc(String(contact.whatsapp).replace(/\D/g, ""))}" target="_blank" rel="noopener">${ic("ext")}واتساب</a>` : ""}</div>` : ""}
+      <form id="f-contact">
+        <label class="field"><span>اسمك</span><input name="name" required maxlength="60" value="${esc(a.display_name || "")}"></label>
+        <label class="field"><span>رسالتك</span><textarea name="message" required minlength="5" maxlength="2000"></textarea></label>
+        <button class="btn block" type="submit">أرسل</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>خصوصيتك</h2>
+      <div class="muted" style="font-size:14px;line-height:1.9">مصاريفك ما تطلع لأي جهة.<br>المساعد الذكي يشوف إجماليات بس، مو عملياتك.<br>ما نربح من الرسوم المتأخرة، وما نشجعك على التزامات جديدة.</div>
+      <div class="btn-row" style="margin-top:12px"><button class="link-btn" data-legal="privacy">سياسة الخصوصية</button><button class="link-btn" data-legal="terms">الشروط</button></div>
+    </section>
+
+    ${S.demo ? `<section class="card"><h2>أدوات الديمو</h2><div class="stack">
+      <button class="btn ghost block" data-act="next-month">انتقل للشهر الجاي</button>
+      <button class="btn ghost block" data-act="reset">ابدأ الديمو من جديد</button></div></section>` : ""}
+
+    <div class="stack" style="margin-bottom:10px">
+      <button class="btn ghost block" data-act="logout">تسجيل الخروج</button>
+      <button class="btn danger block" data-act="revoke">إلغاء الموافقة وحذف بياناتي</button>
+    </div>`;
+  $("#f-contact").addEventListener("submit", async e => {
+    e.preventDefault();
+    try { await api("/api/contact", { method: "POST", body: { name: e.target.name.value.trim(), message: e.target.message.value.trim() } });
+      e.target.message.value = ""; toast("وصلتنا رسالتك، بنرد عليك قريب.", "good"); }
+    catch (err) { handleError(err); }
   });
-  $("chat-suggestions").addEventListener("click", event => { const button = event.target.closest("button"); if (button) sendChat(button.textContent); });
-  $("chat-form").addEventListener("submit", event => { event.preventDefault(); const text = $("chat-input").value.trim(); if (text) sendChat(text); });
-  async function sendChat(text) {
-    if (chatBusy) return;
-    chatBusy = true;
-    $("chat-input").value = "";
-    appendMessage("user", text);
-    const pending = appendMessage("assistant", "لحظة، أحسب…");
+  S._budget = b;
+}
+
+function budgetSheet() {
+  const t = Object.fromEntries((S._budget.target || []).map(x => [x.id, x.pct]));
+  const sheet = openSheet({ title: "أهداف توزيع راتبك", body: `
+    <form id="f-budget">
+      ${[["essentials_pct", "الأساسيات (الالتزامات والمعيشة)", t.essentials], ["personal_pct", "شخصية", t.personal], ["savings_pct", "الادخار", t.savings]]
+        .map(([k, l, v]) => `<div class="pct-row"><span>${l}</span><input name="${k}" inputmode="numeric" value="${v}"></div>`).join("")}
+      <p class="muted" id="sum-note">المجموع لازم يكون 100%.</p>
+      <p class="muted">نسبة الادخار هي الحد الأعلى لـ«تجمع أول» كل شهر.</p>
+      <button class="btn block" type="submit">حفظ</button>
+    </form>` });
+  const f = $("#f-budget", sheet);
+  const sum = () => ["essentials_pct", "personal_pct", "savings_pct"].reduce((a, k) => a + Math.round(toNum(f[k].value)), 0);
+  f.addEventListener("input", () => { const s = sum(); $("#sum-note", sheet).textContent = `المجموع ${s}%${s === 100 ? " ✓" : "، لازم يكون 100%."}`; });
+  f.addEventListener("submit", async e => {
+    e.preventDefault();
+    if (sum() !== 100) return toast("مجموع النسب لازم يكون 100%.", "bad");
+    const body = Object.fromEntries(["essentials_pct", "personal_pct", "savings_pct"].map(k => [k, Math.round(toNum(f[k].value))]));
+    try { await api("/api/budget", { method: "PUT", body }); closeSheet(); toast("حفظنا أهدافك.", "good"); refresh(); }
+    catch (err) { handleError(err); }
+  });
+}
+
+/* ===================== SUBSCRIPTIONS ===================== */
+async function renderSubscriptions() {
+  backTop("الباقات");
+  const r = await api("/api/subscriptions");
+  const cur = r.current.id;
+  const yes = `<span class="teal">✓</span>`, no = `<span class="muted">✕</span>`;
+  $("#view").innerHTML = `
+    <p class="page-sub">كل اللي تحتاجه عشان تعرف وضعك موجود في الأساسية. الباقات الثانية تضيف مزايا.</p>
+    ${r.tiers.map(t => `<article class="plan ${t.id === cur ? "current" : ""}">
+      <div class="card-head" style="margin:0"><b style="font-size:18px">${esc(t.name)}</b>
+        ${t.id === cur ? `<span class="badge b-paid">باقتك الحالية</span>` : ""}</div>
+      <div class="huge" style="margin:6px 0 0">${t.price ? `${money(t.price)}<span class="muted" style="font-size:14px"> / شهر</span>` : "مجانية"}</div>
+      <ul>${t.features.map(f => `<li class="${f.startsWith("بدون") ? "no" : ""}">${f.startsWith("بدون") ? "✕" : "✓"} ${esc(f)}</li>`).join("")}</ul>
+      ${t.id === cur ? `<button class="btn ghost block" disabled>باقتك الحالية</button>` : `<button class="btn block" data-act="upgrade">${t.price > r.current.price ? "ترقية" : "انتقل لها"}</button>`}
+    </article>`).join("")}
+    <section class="card">
+      <h2>مقارنة سريعة</h2>
+      <div class="cmp-wrap"><table class="cmp">
+        <tr><th></th>${r.tiers.map(t => `<th>${esc(t.name)}</th>`).join("")}</tr>
+        <tr><td>الالتزامات المعروضة</td>${r.tiers.map(t => `<td>${t.obligation_limit == null ? "بلا حد" : t.obligation_limit}</td>`).join("")}</tr>
+        <tr><td>الحساب الذكي</td>${r.tiers.map(t => `<td>${t.smart_account ? yes : no}</td>`).join("")}</tr>
+        <tr><td>محاكاة الالتزامات المحدثة</td>${r.tiers.map(t => `<td>${t.planner ? yes : no}</td>`).join("")}</tr>
+        <tr><td>محاكاة التوقعات المالية</td>${r.tiers.map(t => `<td>${t.forecast ? yes : no}</td>`).join("")}</tr>
+        <tr><td>السعر</td>${r.tiers.map(t => `<td>${t.price ? `${t.price} ر.س` : "مجاناً"}</td>`).join("")}</tr>
+      </table></div>
+    </section>
+    ${r.demo_mode ? `<section class="card"><h2>تبديل الباقة (للديمو)</h2>
+      <div class="seg">${r.tiers.map(t => `<button data-plan-switch="${t.id}" aria-pressed="${t.id === cur}">${esc(t.name)}</button>`).join("")}</div>
+      <p class="muted" style="margin:8px 0 0">بدون دفع، عشان تشوف الفرق بين الباقات.</p></section>` : ""}`;
+}
+
+/* ===================== CHAT ===================== */
+const SUGGESTIONS = ["أقدر آخذ جوال بـ 3000 على 4 دفعات؟", "طيب متى أقدر؟", "حط الجوال بالأمنيات", "كم عليّ هالشهر؟", "ضيف مصروف قهوة 20"];
+function chatHtml() {
+  return S.chat.map(m => {
+    if (m.type === "action") {
+      const a = m.action;
+      const done = a.state === "confirmed" ? `<div class="alert good" style="margin-top:10px">${ic("check")}<div>تم.</div></div>`
+        : a.state === "cancelled" ? `<div class="muted" style="margin-top:8px">انلغى.</div>`
+        : `<div class="btn-row"><button class="btn teal sm" data-act-confirm="${esc(a.id)}">أكّد</button><button class="btn ghost sm" data-act-cancel="${esc(a.id)}">إلغاء</button></div>`;
+      return `<div class="action-card"><b>تأكيد قبل التعديل</b><div style="margin-top:4px">${esc(a.summary)}</div>${done}</div>`;
+    }
+    return `<div class="msg ${m.role}">${esc(m.text)}${m.tools && m.tools.length ? `<span class="tools">engine: ${m.tools.map(esc).join(", ")}</span>` : ""}</div>`;
+  }).join("");
+}
+function openChat() {
+  if (!S.chat.length) S.chat.push({ role: "bot", text: `هلا ${S.me && S.me.name ? S.me.name : ""}! أنا مساعد مُدار. اسألني عن التزاماتك، مصاريفك، أو أي شي تفكر تشتريه.` });
+  const sheet = openSheet({ title: "مساعد مُدار", tall: true, body: `<div class="msgs" id="msgs">${chatHtml()}</div>` });
+  sheet.insertAdjacentHTML("beforeend", `
+    <div class="suggest">${SUGGESTIONS.map(s => `<button type="button" data-suggest>${s}</button>`).join("")}</div>
+    <form class="composer" id="f-chat"><input id="chat-in" placeholder="اكتب رسالتك…" maxlength="500" autocomplete="off">
+      <button class="btn" type="submit" aria-label="إرسال">${ic("send")}</button></form>`);
+  const body = $(".sheet-body", sheet);
+  const paint = () => { $("#msgs", sheet).innerHTML = chatHtml(); body.scrollTop = body.scrollHeight; };
+  paint();
+  async function send(text) {
+    S.chat.push({ role: "user", text }); S.chat.push({ role: "bot", text: "لحظة، أحسب…", pending: true }); paint();
     try {
-      const result = await api("/api/chat", { method: "POST", body: { message: text } });
-      pending.textContent = result.reply || "ما قدرت أطلع لك إجابة الحين.";
-      if (result.tools?.length) {
-        const trace = document.createElement("small");
-        trace.className = "tool-trace";
-        trace.textContent = `engine: ${result.tools.join(" · ")}`;
-        pending.appendChild(trace);
-      }
-      (result.actions || []).filter(action => action.status === "pending").forEach(renderPendingAction);
-    } catch (error) {
-      pending.textContent = error.message || "فيه مشكلة بالاتصال، جرّب مرة ثانية.";
-    } finally { chatBusy = false; $("chat-input").focus({ preventScroll: true }); }
+      const r = await api("/api/chat", { method: "POST", body: { message: text } });
+      S.chat.pop(); S.chat.push({ role: "bot", text: r.reply, tools: r.tools });
+      (r.actions || []).forEach(a => S.chat.push({ type: "action", action: { ...a, state: "pending" } }));
+    } catch (err) {
+      S.chat.pop(); S.chat.push({ role: "bot", text: err.message || "فيه مشكلة بالاتصال، جرّب مرة ثانية." });
+      if (err.status === 401) { closeSheet(); handleError(err); return; }
+    }
+    paint();
   }
-  function renderPendingAction(action) {
-    const card = document.createElement("div");
-    card.className = "message pending";
-    const summary = document.createElement("div");
-    summary.className = "pending-summary";
-    summary.textContent = action.summary || "فيه تعديل ينتظر موافقتك.";
-    const actions = document.createElement("div");
-    actions.className = "pending-actions";
-    const yes = document.createElement("button");
-    yes.type = "button"; yes.className = "confirm-action"; yes.textContent = "أكّد";
-    const no = document.createElement("button");
-    no.type = "button"; no.className = "cancel-action"; no.textContent = "إلغاء";
-    yes.addEventListener("click", () => resolveAction(action.id, "confirm", card, yes));
-    no.addEventListener("click", () => resolveAction(action.id, "cancel", card, no));
-    actions.append(yes, no); card.append(summary, actions); $("chat-messages").appendChild(card);
-    $("chat-messages").scrollTop = $("chat-messages").scrollHeight;
-  }
-  async function resolveAction(id, operation, card, button) {
-    if (button.disabled) return;
-    card.querySelectorAll("button").forEach(item => item.disabled = true);
+  $("#f-chat", sheet).addEventListener("submit", e => { e.preventDefault(); const v = $("#chat-in", sheet).value.trim(); if (v) { $("#chat-in", sheet).value = ""; send(v); } });
+  sheet.addEventListener("click", async e => {
+    const sug = e.target.closest("[data-suggest]"); if (sug) send(sug.textContent);
+    const c = e.target.closest("[data-act-confirm]"), x = e.target.closest("[data-act-cancel]");
+    const id = c ? c.dataset.actConfirm : x ? x.dataset.actCancel : null;
+    if (!id) return;
+    const item = S.chat.find(m => m.type === "action" && m.action.id === id);
     try {
-      await api(`/api/chat/actions/${encodeURIComponent(id)}/${operation}`, { method: "POST" });
-      card.textContent = operation === "confirm" ? "تم التعديل." : "ألغينا التعديل.";
-      if (operation === "confirm") {
-        await updateWishCount();
-        const page = (location.hash || "#overview").slice(1);
-        const loaders = { overview: loadOverview, expenses: loadExpenses, obligations: loadObligations, buy: loadOffers, account: loadAccount, wish: loadWishlist };
-        await loaders[page]?.();
-      }
-    } catch (error) { card.querySelectorAll("button").forEach(item => item.disabled = false); showError(error); }
+      await api(`/api/chat/actions/${encodeURIComponent(id)}/${c ? "confirm" : "cancel"}`, { method: "POST" });
+      item.action.state = c ? "confirmed" : "cancelled"; paint();
+      if (c) { toast("تم التعديل.", "good"); refresh(); }
+    } catch (err) { item.action.state = "cancelled"; paint(); handleError(err); }
+  });
+}
+
+/* ===================== global events ===================== */
+document.addEventListener("click", async e => {
+  const t = e.target;
+  const copy = t.closest("[data-copy]");
+  if (copy) {
+    e.preventDefault();
+    try { await navigator.clipboard.writeText(copy.dataset.copy); toast("نسخنا رقم السداد.", "good"); }
+    catch (_) { toast("رقم السداد: " + esc(copy.dataset.copy)); }
+    return;
+  }
+  if (t.closest("#fab")) return openChat();
+  const legal = t.closest("[data-legal]");
+  if (legal && !t.closest("#screen")) { e.preventDefault(); return legalSheet(legal.dataset.legal); }
+  if (t.closest("#layer .sheet-bg") || t.closest("#screen")) return;   // sheets & screens handle their own clicks
+
+  const act = t.closest("[data-act]")?.dataset.act;
+  if (act === "pay") return paySheet();
+  if (act === "add-expense") return addExpenseSheet();
+  if (act === "add-plan") return addPlanSheet();
+  if (act === "next-month") return nextMonth();
+  if (act === "edit-budget") return budgetSheet();
+  if (act === "logout") return logout();
+  if (act === "upgrade") return toast("قريباً.");
+  if (act === "others") { S.planner.others = !S.planner.others; return plannerResults().catch(handleError); }
+  if (act === "wish-save") return addWishFromPlanner("save");
+  if (act === "wish-offer") {
+    const out = $("#pl-out"); const methods = JSON.parse(out.dataset.methods || "{}");
+    return addWishFromPlanner(methods[out.dataset.chosen] || "bnpl4");
+  }
+  if (act === "reset") {
+    if (!confirm("بنبدأ الديمو من جديد ونمسح البيانات الحالية. تبي نكمل؟")) return;
+    try { const r = await api("/api/demo/reset", { method: "POST" }); setToken(r.token); S.chat = []; showDetected(); } catch (err) { handleError(err); }
+    return;
+  }
+  if (act === "revoke") {
+    if (!confirm("متأكد؟ بنلغي الموافقة ونحذف عملياتك والتزاماتك.")) return;
+    try { await api("/api/consent", { method: "DELETE" }); toast("ألغينا الموافقة وحذفنا بياناتك.", "good"); S.chat = []; showBankConnect(); }
+    catch (err) { handleError(err); }
+    return;
   }
 
-  /* Existing bank consent/onboarding, followed by explicit review of every detected plan. */
-  const banks = [["demo1","بنك تجريبي أ"],["demo2","بنك تجريبي ب"],["demo3","بنك تجريبي ج"]];
-  $("banks").innerHTML = banks.map(([id,name], index) => `<button type="button" class="bank-option" data-bank="${id}" aria-pressed="false"><span class="bank-monogram">${index + 1}</span><span>${esc(name)}</span></button>`).join("");
-  $("banks").addEventListener("click", event => {
-    const bank = event.target.closest("[data-bank]");
-    if (!bank) return;
-    selectedBank = bank.dataset.bank;
-    $("banks").querySelectorAll("[data-bank]").forEach(item => item.setAttribute("aria-pressed", String(item === bank)));
-    $("btn-connect").disabled = false;
-  });
-  function showOnboardScreen(id) {
-    $("onboarding").hidden = false;
-    ["ob-connect","ob-loading","ob-production","ob-error","ob-detect"].forEach(section => $(section).hidden = section !== id);
-    if (id === "ob-production") $("ob-demo-note").hidden = true;
-  }
-  $("btn-connect").addEventListener("click", async event => {
-    const button = event.currentTarget;
-    if (apiMode === "production") return showOnboardScreen("ob-production");
-    if (!selectedBank || button.disabled) return;
-    button.disabled = true;
-    showOnboardScreen("ob-loading");
-    try {
-      const [result] = await Promise.all([api("/api/consent", { method: "POST", body: { bank_id: selectedBank } }), new Promise(resolve => setTimeout(resolve, 700))]);
-      saveToken(result.token);
-      await startDetection(result);
-    } catch (error) {
-      showOnboardScreen("ob-error");
-      $("ob-error-text").textContent = error.message || "تأكد من النت وجرّب مرة ثانية.";
-    } finally { button.disabled = false; }
-  });
-  async function startDetection(result) {
-    showOnboardScreen("ob-detect");
-    $("ob-detect-title").textContent = `هذي الخطط اللي لقيناها (${format(result.plans_found || 0)})`;
-    try { const plans = await api("/api/plans"); renderDetected(plans.plans || []); }
-    catch (error) { showOnboardScreen("ob-error"); $("ob-error-text").textContent = error.message; }
-  }
-  function renderDetected(plans) {
-    $("ob-plans").innerHTML = plans.length ? plans.map(plan => `<article class="detected-plan" data-detected="${esc(plan.id)}"><h3>${esc(plan.name)}</h3><div class="form-row"><label>المبلغ الشهري<input type="number" min="0.01" step="0.01" inputmode="decimal" name="amount" value="${esc(plan.amount)}" aria-label="المبلغ الشهري لخطة ${esc(plan.name)}"></label><label>الدفعات الباقية<input type="number" min="0" max="600" inputmode="numeric" name="remaining" value="${esc(plan.remaining ?? "")}" aria-label="الدفعات الباقية لخطة ${esc(plan.name)}"></label></div><div class="item-meta">يوم ${format(plan.day)} من كل شهر ${plan.confirmed ? "· مؤكدة" : ""}</div><button class="button ${plan.confirmed ? "secondary" : "primary"} full" type="button" data-detected-confirm="${esc(plan.id)}" ${plan.confirmed ? "disabled" : ""}>${plan.confirmed ? "تم التأكيد" : "أكد هالخطة"}</button></article>`).join("") : empty("ما لقينا خطط", "تقدر تضيف التزاماتك من الرئيسية بعدين.");
-    $("btn-onboard-done").disabled = plans.some(plan => !plan.confirmed);
-    $("btn-onboard-done").dataset.plans = String(plans.length);
-  }
-  $("ob-plans").addEventListener("click", async event => {
-    const button = event.target.closest("[data-detected-confirm]");
-    if (!button || button.disabled) return;
-    const card = button.closest("[data-detected]");
-    const amount = toNum(card.querySelector('[name="amount"]').value);
-    const rawRemaining = card.querySelector('[name="remaining"]').value.trim();
-    const remaining = rawRemaining === "" ? null : Number(rawRemaining);
-    if (!amount || rawRemaining !== "" && (!Number.isInteger(remaining) || remaining < 0 || remaining > 600)) return toast("راجع مبلغ الخطة وعدد الدفعات.", "error");
-    button.disabled = true;
-    try {
-      const result = await api(`/api/plans/${encodeURIComponent(button.dataset.detectedConfirm)}/confirm`, { method: "POST", body: { amount, ...(remaining === null ? {} : { remaining }) } });
-      renderDetected(result.plans || (await api("/api/plans")).plans || []);
-    } catch (error) { showError(error); button.disabled = false; }
-  });
-  $("btn-onboard-done").addEventListener("click", () => {
-    $("onboarding").hidden = true;
-    started = true;
-    location.hash = "#overview";
-    route();
-  });
-  $("btn-retry").addEventListener("click", boot);
-  async function boot() {
-    showOnboardScreen("ob-loading");
-    try {
-      const results = await Promise.all([
-        api("/api/health"),
-        api("/api/language").catch(() => { throw new Error("ما قدرنا نحمل صيغ الأعداد. جرّب مرة ثانية."); })
-      ]);
-      apiMode = results[0].demo_mode === true ? "demo" : "production";
-      language = results[1]?.forms || results[1];
-      if (!["payments","days"].every(kind => language?.[kind] && ["one","two","few","many"].every(form => typeof language[kind][form] === "string" && language[kind][form]))) {
-        throw new Error("ما قدرنا نحمل صيغ الأعداد. جرّب مرة ثانية.");
-      }
-      $("wish-method").innerHTML = methodOptions();
-      if (apiMode === "production") $("demo-next-month").hidden = true;
-      if (!token) return showOnboardScreen(apiMode === "production" ? "ob-production" : "ob-connect");
-      const summary = await api("/api/summary");
-      if (apiMode === "demo" && !(number(summary.salary?.amount) > 0)) { saveToken(null); return showOnboardScreen("ob-connect"); }
-      started = true;
-      $("onboarding").hidden = true;
-      route();
-      updateWishCount();
-    } catch (error) {
-      if (error.status === 401 || error.status === 404) { saveToken(null); return showOnboardScreen(apiMode === "production" ? "ob-production" : "ob-connect"); }
-      showOnboardScreen("ob-error");
-      $("ob-error-text").textContent = error.message || "تأكد من النت وجرّب مرة ثانية.";
-    }
-  }
-  boot();
+  const offer = t.closest("[data-offer]");
+  if (offer) { S.planner.chosen = offer.dataset.offer; return plannerResults().catch(handleError); }
+  const setM = t.closest("[data-set-months]");
+  if (setM) { S.planner.months = setM.dataset.setMonths; $("#pl-months").value = S.planner.months; return plannerResults().catch(handleError); }
+  const setP = t.closest("[data-set-price]");
+  if (setP) { S.planner.price = setP.dataset.setPrice; $("#pl-price").value = S.planner.price; return plannerResults().catch(handleError); }
+  const cmp = t.closest("[data-compare]");
+  if (cmp) { S.planner = { ...S.planner, name: cmp.dataset.name, price: cmp.dataset.price, chosen: null }; location.hash = "#planner"; return; }
+  const delW = t.closest("[data-del-wish]");
+  if (delW) { try { await api(`/api/wishlist/${delW.dataset.delWish}`, { method: "DELETE" }); refresh(); } catch (err) { handleError(err); } return; }
+  const delE = t.closest("[data-del-exp]");
+  if (delE) { e.stopPropagation(); try { await api(`/api/expenses/${encodeURIComponent(delE.dataset.delExp)}`, { method: "DELETE" }); toast("حذفنا المصروف.", "good"); refresh(); } catch (err) { handleError(err); } return; }
+  const recat = t.closest("[data-recat]");
+  if (recat) return recategorizeSheet(recat.dataset.recat);
+  const tab = t.closest("[data-tab-ob]");
+  if (tab) { S.obTab = tab.dataset.tabOb; return refresh(); }
+  const conf = t.closest("[data-confirm]");
+  if (conf) { try { await api(`/api/plans/${encodeURIComponent(conf.dataset.confirm)}/confirm`, { method: "POST", body: {} }); toast("أكدنا الالتزام.", "good"); refresh(); } catch (err) { handleError(err); } return; }
+  const delP = t.closest("[data-del-plan]");
+  if (delP) { if (!confirm("نحذف هالالتزام من مُدار؟ هذا ما يلغيه عند الجهة.")) return;
+    try { await api(`/api/plans/${encodeURIComponent(delP.dataset.delPlan)}`, { method: "DELETE" }); refresh(); } catch (err) { handleError(err); } return; }
+  const th = t.closest("[data-theme-set]");
+  if (th) { applyTheme(th.dataset.themeSet); $$("[data-theme-set]").forEach(b => b.setAttribute("aria-pressed", b === th)); return; }
+  const sw = t.closest("[data-plan-switch]");
+  if (sw) { try { await api("/api/demo/subscription", { method: "POST", body: { plan: sw.dataset.planSwitch } }); toast("بدّلنا الباقة.", "good"); refresh(); } catch (err) { handleError(err); } }
+});
 
-  if ("serviceWorker" in navigator) {
-    // Registered in the document shell; the worker caches static files only.
-  }
-})();
+document.addEventListener("change", async e => {
+  const m = e.target.closest("[data-mode]");
+  if (!m || e.target.closest(".sheet-bg")) return;
+  try {
+    await api(`/api/plans/${encodeURIComponent(m.dataset.mode)}`, { method: "PATCH", body: { pay_mode: m.checked ? "auto" : "manual" } });
+    toast(m.checked ? "تمام، هالالتزام ينسحب تلقائي وما ينحسب بـ«ادفع الكل»." : "تمام، تقدر تدفعه من «ادفع الكل».", "good");
+    refresh();
+  } catch (err) { m.checked = !m.checked; handleError(err); }
+});
+
+/* ===================== boot ===================== */
+applyTheme();
+if (S.token) startApp(); else showWelcome();
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/static/sw.js").catch(() => {}));
+}

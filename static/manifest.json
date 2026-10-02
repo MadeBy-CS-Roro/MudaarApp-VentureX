@@ -1,12 +1,13 @@
 {
-  "name": "موعد",
-  "short_name": "موعد",
+  "name": "مُدار",
+  "short_name": "مُدار",
+  "description": "التزاماتك، مصاريفك، وراتبك بمكان واحد",
   "lang": "ar",
   "dir": "rtl",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f2f0fa",
-  "theme_color": "#7650d4",
+  "background_color": "#1c1a28",
+  "theme_color": "#1c1a28",
   "icons": [
     {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
     {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"}

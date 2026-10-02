@@ -41,10 +41,7 @@ CREATE TABLE IF NOT EXISTS manual_expenses (
   amount REAL NOT NULL CHECK(amount > 0 AND amount <= 1000000),
   merchant TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
-  category TEXT NOT NULL CHECK(category IN (
-    'flexible:مطاعم', 'flexible:توصيل', 'flexible:تسوق',
-    'flexible:ترفيه', 'flexible:أخرى'
-  ))
+  category TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_manual_user_date ON manual_expenses(user_id, date);
 CREATE TABLE IF NOT EXISTS plans (
@@ -153,9 +150,74 @@ def tx():
         con.close()
 
 
+EXTRA_SCHEMA = """
+CREATE TABLE IF NOT EXISTS otp_codes (
+  phone_hash TEXT PRIMARY KEY,
+  code_hash TEXT NOT NULL,
+  purpose TEXT NOT NULL,                   -- signup | login
+  pending_name TEXT,
+  pending_email TEXT,
+  expires_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT
+);
+CREATE TABLE IF NOT EXISTS cycle_payments (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  plan_id TEXT NOT NULL,
+  cycle INTEGER NOT NULL,
+  amount REAL NOT NULL,
+  paid_at TEXT NOT NULL,
+  source TEXT NOT NULL,
+  PRIMARY KEY (user_id, plan_id, cycle)
+);
+"""
+
+# Old category names -> fixed category list (see detect.CATEGORIES)
+CATEGORY_RENAMES = {
+    "essential:بنزين": "essential:وقود", "essential:مدارس": "essential:تعليم",
+    "essential:اتصالات": "essential:اتصالات وإنترنت", "flexible:مطاعم": "flexible:مطاعم ومقاهي",
+    "flexible:تسوق": "flexible:تسوق وملابس",
+}
+
+
+def _columns(con, table):
+    return {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+
+
+def migrate(con):
+    con.executescript(EXTRA_SCHEMA)
+    for table, column, ddl in (("users", "phone_hash", "TEXT"), ("users", "phone_last3", "TEXT"),
+                               ("users", "email", "TEXT"), ("plans", "pay_mode", "TEXT")):
+        if column not in _columns(con, table):
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone_hash) WHERE phone_hash IS NOT NULL")
+    # manual_expenses had a CHECK with the old personal category names: rebuild without it.
+    ddl = con.execute("SELECT sql FROM sqlite_master WHERE name='manual_expenses'").fetchone()
+    if ddl and "category IN" in ddl["sql"]:
+        con.executescript("""
+            ALTER TABLE manual_expenses RENAME TO manual_expenses_old;
+            CREATE TABLE manual_expenses (
+              id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL REFERENCES users(id),
+              date TEXT NOT NULL,
+              amount REAL NOT NULL CHECK(amount > 0 AND amount <= 1000000),
+              merchant TEXT NOT NULL,
+              description TEXT NOT NULL DEFAULT '',
+              category TEXT NOT NULL
+            );
+            INSERT INTO manual_expenses SELECT * FROM manual_expenses_old;
+            DROP TABLE manual_expenses_old;
+            CREATE INDEX IF NOT EXISTS ix_manual_user_date ON manual_expenses(user_id, date);
+        """)
+    for old, new in CATEGORY_RENAMES.items():
+        for table in ("transactions", "manual_expenses", "category_overrides"):
+            con.execute(f"UPDATE {table} SET category=? WHERE category=?", (new, old))
+
+
 def init():
     with tx() as con:
         con.executescript(SCHEMA)
+        migrate(con)
         columns = {r["name"] for r in con.execute("PRAGMA table_info(transactions)")}
         if "source" not in columns:
             con.execute("ALTER TABLE transactions ADD COLUMN source TEXT NOT NULL DEFAULT 'bank'")

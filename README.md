@@ -1,4 +1,4 @@
-# Mawid backend
+# مُدار (Mudar)
 
 FastAPI + SQLite. The engine does all the math. The assistant only explains tool results.
 
@@ -42,7 +42,7 @@ FastAPI + SQLite. The engine does all the math. The assistant only explains tool
 | POST | `/api/demo/reset` | | same as consent |
 
 `tightK`, `earliest`, `buyK`: months from now (0 = this month, 1 = next month).
-Demo auth: send `Authorization: Bearer <token>` from `/api/consent`; with demo mode enabled (default), the token is optional.
+Demo auth: sign in through `/api/auth/demo` or the demo signup/verification flow, then send `Authorization: Bearer <token>`. Login is required even in demo mode; anonymous demo access is enabled only by the automated test setup.
 
 Manual expenses use the same user authentication as the other API routes. Amounts must
 be positive, at most 1,000,000 SAR, and have at most two decimal places. Categories
@@ -112,3 +112,14 @@ All protected production routes require a signed bearer token with `mode=product
 Safe to spend 600 = 8,700 − 4,100 − 3,500 − 500. Spent 420, available 180.
 Phone 3,000 in 4 payments: short 570 now, fits next month with 150 left in the tightest month.
 After "next month": Tabby ends, safe to spend 900, phone notification fires.
+
+
+## Login and payments (latest)
+- Passwordless login: `POST /api/auth/signup`, `/api/auth/login`, `/api/auth/verify` (phone + 6-digit code).
+  Demo mode returns `demo_code` and shows it on screen. Production returns 501 until an SMS provider is set.
+- Quick demo login as Noura: `POST /api/auth/demo` (button on the welcome screen). Demo phone: 0500000123.
+- All `/api` routes need the token, except health, categories, contact and auth.
+- `POST /api/consent` connects the bank for the logged-in user.
+- Pay all: `GET /api/payments/due`, `POST /api/payments/pay` (demo only, simulated bank approval), `PATCH /api/plans/{id}` `{pay_mode}`.
+- Fixed categories: `GET /api/categories`.
+- Tests set `MUDAR_ALLOW_ANON=1` in tests/conftest.py so old tests can call without a token. Never set it on the live app.

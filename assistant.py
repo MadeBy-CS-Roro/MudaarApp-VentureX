@@ -23,7 +23,7 @@ import language
 MODEL = os.getenv("MAWID_LLM_MODEL", "claude-haiku-4-5-20251001")
 API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-SYSTEM = """أنت "مساعد موعد"، مساعد مالي شخصي لمستخدم سعودي.
+SYSTEM = """أنت "مساعد مُدار"، مساعد مالي شخصي لمستخدم سعودي.
 - رد باللهجة السعودية البسيطة إذا كتب المستخدم بالعربي، وبالإنجليزي إذا كتب بالإنجليزي.
 - لا تحسب أي رقم بنفسك أبداً. كل رقم لازم يجي من نتيجة أداة. إذا تحتاج رقم، نادِ الأداة.
 - أنت "مساعد" مو "مستشار": تعطي معلومات وتنبيهات، وما توصي بقرض أو جهة تمويل أو استثمار.
@@ -35,6 +35,7 @@ SYSTEM += """
 - رد بلهجة سعودية بيضاء بسيطة ومتسقة. لا تستخدم فصحى رسمية.
 - طابق العدد مع المعدود صح: دفعة وحدة، دفعتين، 3 دفعات، 17 دفعة؛ يوم واحد، يومين، 3 أيام، 30 يوم.
 - خاطب المستخدم بالمفرد المذكر. استخدم هالشهر، الشهر الجاي، الحين، شهور، ر.س.
+- قل "الالتزامات" مو "الأقساط".
 - قبل أي تعديل، اعرض الملخص وانتظر التأكيد. أدوات الكتابة تنشئ طلب تأكيد فقط، مو تعديل فعلي.
 - لا تقول إنك أضفت أو حذفت شي قبل ما المستخدم يأكد الطلب.
 - عروض الجهات تجريبية للتوضيح، مو عروض حقيقية. لا توصي بجهة؛ قل الأوفر لك حسب الحسابات.
@@ -159,7 +160,7 @@ def _chat_rules(con, user_id: int, m: str) -> dict:
             return {"reply": "كم مبلغ المصروف؟ اكتب مثلاً: ضيف مصروف قهوة 20.", "tools": []}
         name = re.split(r"مصروف\s*", m, maxsplit=1)[-1]
         name = re.sub(r"[\d٠-٩,\.]+.*$", "", name).strip() or "مصروف"
-        category = "flexible:قهوة" if "قهوة" in name else "flexible:غير مصنف"
+        category = "flexible:مطاعم ومقاهي" if re.search(r"قهوة|كوفي|مطعم|غدا|عشا|فطور", name) else "flexible:أخرى"
         out = run_tool(con, user_id, "add_expense", {"name": name, "amount": nums[-1], "category": category})
         return _proposal_reply(out, "add_expense")
 
@@ -191,8 +192,13 @@ def _chat_rules(con, user_id: int, m: str) -> dict:
         s = run_tool(con, user_id, "get_month_summary", {})
         pl = run_tool(con, user_id, "list_plans", {})["plans"]
         names = "، ".join(f"{p['name']} {_f(p['amount'])}" for p in pl if p["remaining"] != 0)
-        return {"reply": f"التزاماتك هالشهر مع المعيشة {_f(s['obligations_total'])} ر.س. الأقساط والإيجار: {names}. وتقدر تصرف {_f(s['available'])} ر.س الحين.",
+        return {"reply": f"التزاماتك هالشهر مع المعيشة {_f(s['obligations_total'])} ر.س. الالتزامات والإيجار: {names}. وتقدر تصرف {_f(s['available'])} ر.س الحين.",
                 "tools": ["get_month_summary", "list_plans"]}
+
+    if re.search(r"كم.*(?:أقدر|اقدر|تقدر).*صرف|المتاح|باقي لي|باقيلي", m):
+        s = run_tool(con, user_id, "get_month_summary", {})
+        return {"reply": f"تقدر تصرف {_f(s['available'])} ر.س الحين، بعد التزاماتك ومصاريفك وهامش الأمان.",
+                "tools": ["get_month_summary"]}
 
     if re.search(r"صرف|مصاريف", m):
         c = run_tool(con, user_id, "get_spending", {})["flexible"]
@@ -203,18 +209,18 @@ def _chat_rules(con, user_id: int, m: str) -> dict:
 
     if re.search(r"أقدر|اقدر|آخذ|اخذ|اشتري|أشتري|جوال", m):
         r = run_tool(con, user_id, "compare_scenarios", {"price": price})[method]
-        lead = {"bnpl4": f"كل دفعة {_f(r['monthly'])}", "fin12": f"القسط {_f(r['monthly'])} والتكلفة الكلية {_f(r['total'])}",
+        lead = {"bnpl4": f"كل دفعة {_f(r['monthly'])}", "fin12": f"الدفعة الشهرية {_f(r['monthly'])} والتكلفة الكلية {_f(r['total'])}",
                 "cash": f"المبلغ كامل {_f(price)}"}[method]
         if r["ok"]:
-            return {"reply": f"{lead}. بعد أقساطك ومصاريفك المعتادة يبقى لك {_f(r['tight'])} ر.س في أضيق شهر. مناسب.", "tools": ["compare_scenarios"]}
+            return {"reply": f"{lead}. بعد التزاماتك ومصاريفك المعتادة يبقى لك {_f(r['tight'])} ر.س في أضيق شهر. مناسب.", "tools": ["compare_scenarios"]}
         later = ""
         if r["earliest"] is not None:
             snap = service.snapshot(con, user_id)
             later = f" لو تبدأ {E.month_label(r['earliest'])}، يبقى لك {_f(E.evaluate(snap, method, price, r['earliest'])['tight'])} ر.س في أضيق شهر."
-        return {"reply": f"{lead}. {E.month_label(r['tightK'])} تصير ناقص {_f(-r['tight'])} ر.س بعد أقساطك ومصاريفك. ما يكفيك الحين.{later}",
+        return {"reply": f"{lead}. {E.month_label(r['tightK'])} تصير ناقص {_f(-r['tight'])} ر.س بعد التزاماتك ومصاريفك. ما يكفيك الحين.{later}",
                 "tools": ["compare_scenarios"]}
 
-    return {"reply": "أقدر أجاوبك عن أقساطك، مصاريفك، أو شي تبي تشتريه. جرب: «أقدر آخذ جوال بـ 3000 على 4 دفعات؟»", "tools": []}
+    return {"reply": "أقدر أجاوبك عن التزاماتك، مصاريفك، أو شي تبي تشتريه. جرب: «أقدر آخذ جوال بـ 3000 على 4 دفعات؟»", "tools": []}
 
 
 def _proposal_reply(out: dict, tool: str) -> dict:

@@ -35,7 +35,7 @@ def test_obligations_total_does_not_double_count_bills(client):
 
 
 def test_manual_expense_changes_balance_and_deletes(client):
-    r = client.post("/api/expenses", json={"name": "قهوة", "amount": 20, "category": "flexible:قهوة"})
+    r = client.post("/api/expenses", json={"name": "قهوة", "amount": 20, "category": "flexible:مطاعم ومقاهي"})
     assert r.status_code == 200
     item = next(i for i in r.json()["items"] if i["source"] == "manual")
     assert r.json()["flexible_total"] == 440
@@ -106,7 +106,7 @@ def test_generalized_schedules_preserve_existing_functions(client):
 
 
 def test_saving_caps_zero_balance_and_wishlist_month_simulation(client):
-    client.post("/api/expenses", json={"name": "مصروف", "amount": 200, "category": "flexible:غير مصنف"})
+    client.post("/api/expenses", json={"name": "مصروف", "amount": 200, "category": "flexible:أخرى"})
     saving = client.post("/api/offers", json={"price": 3000}).json()["save"]
     assert saving["monthly"] == 0
     assert all(0 <= p["amount"] <= 870 for p in saving["progress"])
@@ -145,7 +145,7 @@ def test_fallback_proposes_only_and_confirm_applies_once(client, message, tool, 
 
 
 def test_cancel_expiry_and_other_user_fail(client):
-    payload = {"name": "قهوة", "amount": 20, "category": "flexible:قهوة"}
+    payload = {"name": "قهوة", "amount": 20, "category": "flexible:مطاعم ومقاهي"}
     a = propose("add_expense", payload)
     assert client.post(f"/api/chat/actions/{a['id']}/cancel").status_code == 200
     assert client.post(f"/api/chat/actions/{a['id']}/confirm").status_code == 409
@@ -167,7 +167,7 @@ def test_cancel_expiry_and_other_user_fail(client):
 
 
 def test_simultaneous_confirm_only_one_wins(client):
-    a = propose("add_expense", {"name": "قهوة", "amount": 20, "category": "flexible:قهوة"})
+    a = propose("add_expense", {"name": "قهوة", "amount": 20, "category": "flexible:مطاعم ومقاهي"})
     path = f"/api/chat/actions/{a['id']}/confirm"
     with ThreadPoolExecutor(max_workers=2) as pool:
         statuses = list(pool.map(lambda _: client.post(path).status_code, range(2)))
@@ -179,7 +179,7 @@ def test_simultaneous_confirm_only_one_wins(client):
     ("add_obligation", {"name": "اشتراك", "amount": 50, "day": 12, "kind": "recurring"}),
     ("update_plan", {"plan_id": "tamara", "amount": 650}),
     ("delete_obligation", {"plan_id": "tamara"}),
-    ("set_category", {"merchant": "COFFEE", "category": "flexible:قهوة"}),
+    ("set_category", {"merchant": "COFFEE", "category": "flexible:مطاعم ومقاهي"}),
 ])
 def test_all_other_write_tools_are_pending_and_confirmed(client, tool, params):
     with main.db.tx() as con:
@@ -197,7 +197,7 @@ def test_remove_wishlist_and_invalid_tool_params(client):
     assert client.post(f"/api/chat/actions/{a['id']}/confirm").status_code == 200
     assert client.get("/api/wishlist").json()["items"] == []
     with main.db.tx() as con:
-        for tool, p in [("add_expense", {"name": "قهوة", "amount": -20, "category": "flexible:قهوة"}),
+        for tool, p in [("add_expense", {"name": "قهوة", "amount": -20, "category": "flexible:مطاعم ومقاهي"}),
                         ("update_plan", {"plan_id": "tamara"}),
                         ("delete_obligation", {"plan_id": "not-owned"}),
                         ("remove_from_wishlist", {"item_id": 100000})]:
@@ -213,7 +213,7 @@ def test_failed_action_rolls_back_claim(client):
 
 
 def test_cross_user_expense_plan_isolation(client):
-    r = client.post("/api/expenses", json={"name": "قهوة", "amount": 20, "category": "flexible:قهوة"}).json()
+    r = client.post("/api/expenses", json={"name": "قهوة", "amount": 20, "category": "flexible:مطاعم ومقاهي"}).json()
     expense = next(i for i in r["items"] if i["source"] == "manual")
     pid = client.post("/api/plans", json={"name": "اشتراك", "amount": 10, "day": 1}).json()["id"]
     other_hash = main.security.hash_id("other-phone")
@@ -246,7 +246,7 @@ def test_contact_validation_rate_limit_and_account(client, monkeypatch):
 
 
 def test_revoke_removes_wishes_pending_categories(client):
-    propose("add_expense", {"name": "قهوة", "amount": 20, "category": "flexible:قهوة"})
+    propose("add_expense", {"name": "قهوة", "amount": 20, "category": "flexible:مطاعم ومقاهي"})
     assert client.delete("/api/consent").status_code == 200
     with main.db.tx() as con:
         for table in ("transactions", "plans", "wishlist", "pending_actions", "category_overrides"):
@@ -265,7 +265,7 @@ def test_llm_write_tools_still_need_individual_confirmations(client, monkeypatch
     replies = iter([
         {"content": [
             {"type": "tool_use", "id": "one", "name": "add_expense",
-             "input": {"name": "قهوة", "amount": 20, "category": "flexible:قهوة"}},
+             "input": {"name": "قهوة", "amount": 20, "category": "flexible:مطاعم ومقاهي"}},
             {"type": "tool_use", "id": "two", "name": "update_plan", "input": {"plan_id": "tamara", "amount": 650}}]},
         {"content": [{"type": "text", "text": "راجع الطلبين وأكّد كل طلب لحاله."}]},
     ])
@@ -303,7 +303,7 @@ def test_legacy_sqlite_source_migration_preserves_rows(tmp_path, monkeypatch):
     with sqlite3.connect(path) as con:
         con.execute("CREATE TABLE transactions(id INTEGER PRIMARY KEY,user_id INTEGER,date TEXT,amount REAL,"
                     "direction TEXT,merchant TEXT,description TEXT,category TEXT)")
-        con.execute("INSERT INTO transactions VALUES (1,1,'2026-09-01',20,'debit','COFFEE','x','flexible:قهوة')")
+        con.execute("INSERT INTO transactions VALUES (1,1,'2026-09-01',20,'debit','COFFEE','x','flexible:مطاعم ومقاهي')")
     main.db.init()
     main.db.init()
     with main.db.tx() as con:

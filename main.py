@@ -1,5 +1,5 @@
 """
-Mawid API (FastAPI).  Run:  uvicorn main:app --host 0.0.0.0 --port 8000
+Mudar (مُدار) API (FastAPI).  Run:  uvicorn main:app --host 0.0.0.0 --port 8000
 Docs at /docs.  Put your front end in ./static/index.html to serve it from /.
 """
 from __future__ import annotations
@@ -27,10 +27,15 @@ import inputs
 import language
 import budget
 import subscriptions
+import auth
+import payments
 
 PRODUCTION_MODE = security.PRODUCTION_MODE
 DEMO_MODE = not PRODUCTION_MODE
 DEMO_USER = "demo-noura"
+# Requests without a token act as the demo persona ONLY when this is set (used by the
+# automated tests). The app itself always logs in and sends a token.
+ALLOW_ANON = os.getenv("MUDAR_ALLOW_ANON", "").lower() in ("1", "true", "yes")
 
 
 def _allowed_origins() -> list[str]:
@@ -72,7 +77,7 @@ async def lifespan(_app):
     db.init()
     yield
 
-app = FastAPI(title="Mawid API", version="0.1", lifespan=lifespan)
+app = FastAPI(title="Mudar API", version="0.1", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
@@ -115,15 +120,26 @@ class CategoryIn(BaseModel):
     merchant: str = Field(min_length=1, max_length=80)
     category: str = Field(pattern=r"^(essential|flexible):.{1,30}$")
 
+    @field_validator("category")
+    @classmethod
+    def known_category(cls, value):
+        if value not in detect.ALL_CATEGORIES:
+            raise ValueError("اختر تصنيف من القائمة.")
+        return value
+
 class ExpenseIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     amount: Decimal = Field(gt=0, le=1_000_000, max_digits=9, decimal_places=2)
     merchant: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=200)
-    category: Literal[
-        "flexible:مطاعم", "flexible:توصيل", "flexible:تسوق",
-        "flexible:ترفيه", "flexible:أخرى",
-    ]
+    category: str
+
+    @field_validator("category")
+    @classmethod
+    def personal_category(cls, value):
+        if not value.startswith("flexible:") or value not in detect.ALL_CATEGORIES:
+            raise ValueError("اختر تصنيف من القائمة.")
+        return value
     date: Optional[Date] = None
 
     @field_validator("merchant", "description", mode="before")
@@ -140,27 +156,42 @@ contact_limiter = security.RateLimiter(limit=5, window=60)
 
 
 # ---------- auth + rate limit ----------
-def current_user(request: Request, authorization: Optional[str] = Header(default=None)) -> dict:
+def _token_user_hash(authorization: Optional[str]) -> Optional[str]:
+    if not (authorization and authorization.startswith("Bearer ")):
+        return None
+    body = security.verify_token(authorization[7:].strip())
+    if not body or not isinstance(body.get("sub"), str) or not body["sub"]:
+        raise HTTPException(401, "الجلسة انتهت، سجّل دخول من جديد.")
+    if PRODUCTION_MODE and body.get("mode") != "production":
+        raise HTTPException(401, "لازم تسجل دخول.")
+    return body["sub"]
+
+
+def _rate(request: Request, authorization: Optional[str]):
     key = authorization or (request.client.host if request.client else "anon")
     if not limiter.allow(key):
         raise HTTPException(429, "طلبات كثيرة، جرب بعد دقيقة.")
-    user_hash = None
-    if authorization and authorization.startswith("Bearer "):
-        body = security.verify_token(authorization[7:].strip())
-        if not body or not isinstance(body.get("sub"), str) or not body["sub"]:
-            raise HTTPException(401, "الجلسة انتهت، اربط حسابك من جديد.")
-        if PRODUCTION_MODE and body.get("mode") != "production":
+
+
+def signed_in_user(request: Request, authorization: Optional[str] = Header(default=None)) -> dict:
+    """Logged in (or demo anon in tests), bank connection NOT required."""
+    _rate(request, authorization)
+    user_hash = _token_user_hash(authorization)
+    if user_hash is None:
+        if DEMO_MODE and ALLOW_ANON:
+            user_hash = security.hash_id(DEMO_USER)
+        else:
             raise HTTPException(401, "لازم تسجل دخول.")
-        user_hash = body["sub"]
-    elif DEMO_MODE:
-        user_hash = security.hash_id(DEMO_USER)
-    else:
-        raise HTTPException(401, "لازم تسجل دخول.")
     with db.tx() as con:
         row = con.execute("SELECT id FROM users WHERE user_hash=?", (user_hash,)).fetchone()
     if not row:
         raise HTTPException(404, "اربط حسابك البنكي أول.")
     return {"id": row["id"], "hash": user_hash}
+
+
+def current_user(request: Request, authorization: Optional[str] = Header(default=None)) -> dict:
+    """Logged-in user. The app checks /api/auth/me to send users without a bank to onboarding."""
+    return signed_in_user(request, authorization)
 
 
 # ---------- routes ----------
@@ -175,13 +206,19 @@ def get_language():
 
 
 @app.post("/api/consent")
-def consent(body: ConsentIn, request: Request):
+def consent(body: ConsentIn, request: Request, authorization: Optional[str] = Header(default=None)):
     if not DEMO_MODE:
         raise HTTPException(404, "المسار غير متاح.")
     if not limiter.allow(request.client.host if request.client else "anon"):
         raise HTTPException(429, "طلبات كثيرة، جرب بعد دقيقة.")
-    user_hash = security.hash_id(DEMO_USER)   # production: hash of the bank's customer id
+    user_hash = _token_user_hash(authorization)
+    if user_hash is None:
+        if not ALLOW_ANON:
+            raise HTTPException(401, "لازم تسجل دخول.")
+        user_hash = security.hash_id(DEMO_USER)
     with db.tx() as con:
+        if user_hash == security.hash_id(DEMO_USER):
+            auth.ensure_demo_user(con, user_hash)
         r = service.connect_bank(con, user_hash, body.bank_id)
         db.audit(con, user_hash, "consent.granted", {"bank": body.bank_id, "consent_id": r["consent_id"],
                                                      "plans_found": len(r["plans"])})
@@ -196,8 +233,94 @@ def consent(body: ConsentIn, request: Request):
             "plans_found": len(r["plans"]), "unknown_merchants": r["unknown_merchants"]}
 
 
+# ---------- auth: phone + one-time code ----------
+class SignupIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    name: str = Field(min_length=2, max_length=40)
+    phone: str = Field(min_length=9, max_length=20)
+    email: Optional[str] = Field(default=None, max_length=120, pattern=r"^$|^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    accept_terms: bool
+
+class PhoneIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    phone: str = Field(min_length=9, max_length=20)
+
+class VerifyIn(PhoneIn):
+    code: str = Field(min_length=4, max_length=8)
+
+auth_ip_limiter = security.RateLimiter(limit=20, window=60)
+auth_phone_limiter = security.RateLimiter(limit=5, window=60)
+
+
+def _auth_rate(request: Request, phone: str):
+    ip = request.client.host if request.client else "anon"
+    if not auth_ip_limiter.allow(ip) or not auth_phone_limiter.allow(auth.normalize_phone(phone) or phone):
+        raise HTTPException(429, "طلبات كثيرة، جرّب بعد دقيقة.")
+
+
+def _auth_out(out: dict) -> dict:
+    if not DEMO_MODE:
+        out.pop("demo_code", None)   # never leak codes outside the demo
+    return out
+
+
+@app.post("/api/auth/signup")
+def auth_signup(body: SignupIn, request: Request):
+    _auth_rate(request, body.phone)
+    if not body.accept_terms:
+        raise HTTPException(422, "لازم توافق على الشروط وسياسة الخصوصية.")
+    with db.tx() as con:
+        return _auth_out(auth.signup(con, body.name, body.phone, body.email, DEMO_MODE))
+
+
+@app.post("/api/auth/login")
+def auth_login(body: PhoneIn, request: Request):
+    _auth_rate(request, body.phone)
+    with db.tx() as con:
+        return _auth_out(auth.login(con, body.phone, DEMO_MODE))
+
+
+@app.post("/api/auth/verify")
+def auth_verify(body: VerifyIn, request: Request):
+    _auth_rate(request, body.phone)
+    with db.tx() as con:
+        out = auth.verify(con, body.phone, body.code)
+        db.audit(con, None, "auth.verified")
+        return out
+
+
+@app.post("/api/auth/demo")
+def auth_demo(request: Request):
+    """Quick login as Noura for the stage demo. Demo mode only."""
+    if not DEMO_MODE:
+        raise HTTPException(404, "المسار غير متاح.")
+    if not limiter.allow(request.client.host if request.client else "anon"):
+        raise HTTPException(429, "طلبات كثيرة، جرب بعد دقيقة.")
+    user_hash = security.hash_id(DEMO_USER)
+    with db.tx() as con:
+        user = auth.ensure_demo_user(con, user_hash)
+        if not con.execute("SELECT 1 FROM consents WHERE user_id=? AND status='active'", (user["id"],)).fetchone():
+            service.connect_bank(con, user_hash, "demo1")
+        return auth.session(con, user)
+
+
+@app.get("/api/auth/me")
+def auth_me(user=Depends(signed_in_user)):
+    with db.tx() as con:
+        row = con.execute("SELECT display_name FROM users WHERE id=?", (user["id"],)).fetchone()
+        connected = bool(con.execute("SELECT 1 FROM consents WHERE user_id=? AND status='active'",
+                                     (user["id"],)).fetchone())
+    return {"name": row["display_name"], "bank_connected": connected}
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    # Tokens are stateless and short-lived; the app deletes its copy.
+    return {"ok": True}
+
+
 @app.delete("/api/consent")
-def revoke(user=Depends(current_user)):
+def revoke(user=Depends(signed_in_user)):
     with db.tx() as con:
         service.revoke(con, user["id"])
         db.audit(con, user["hash"], "consent.revoked")
@@ -230,6 +353,42 @@ def pay_all(plan_id: str, user=Depends(current_user)):
             raise HTTPException(422, str(exc))
         db.audit(con, user["hash"], "plan.settled", {"plan": plan_id, "already_paid": result["already_paid"]})
         return result
+
+
+class PayModeIn(BaseModel):
+    pay_mode: Literal["auto", "manual"]
+
+class PayIn(BaseModel):
+    item_ids: list[str] = Field(min_length=1, max_length=30)
+
+
+@app.patch("/api/plans/{plan_id}")
+def patch_plan(plan_id: str, body: PayModeIn, user=Depends(current_user)):
+    with db.tx() as con:
+        if not payments.set_mode(con, user["id"], plan_id, body.pay_mode):
+            raise HTTPException(404, "الالتزام مو موجود.")
+        db.audit(con, user["hash"], "plan.pay_mode", {"plan": plan_id, "mode": body.pay_mode})
+        return payments.due(con, user["id"])
+
+
+@app.get("/api/payments/due")
+def get_payments_due(user=Depends(current_user)):
+    with db.tx() as con:
+        return payments.due(con, user["id"])
+
+
+@app.post("/api/payments/pay")
+def post_payments(body: PayIn, user=Depends(current_user)):
+    with db.tx() as con:
+        out = payments.pay(con, user["id"], body.item_ids, DEMO_MODE)
+        db.audit(con, user["hash"], "payments.demo_paid", {"count": len(out["paid"]), "total": out["total"]})
+        return {**out, "due": payments.due(con, user["id"])}
+
+
+@app.get("/api/categories")
+def get_categories():
+    return {"groups": [{"id": "essential", "label": "الأساسيات", "items": detect.CATEGORIES["essential"]},
+                       {"id": "flexible", "label": "شخصية", "items": detect.CATEGORIES["flexible"]}]}
 
 
 @app.get("/api/summary")
@@ -417,7 +576,7 @@ def post_chat(body: ChatIn, user=Depends(current_user)):
     # Commit the atomic quota claim before waiting for an external LLM.
     with db.tx() as con:
         if not service.consume_chat_question(con, user["id"]):
-            raise HTTPException(429, "خلصت أسئلتك المجانية هالشهر. تتجدد الشهر الجاي، وباقي مزايا موعد متاحة لك.")
+            raise HTTPException(429, "خلصت أسئلتك المجانية هالشهر. تتجدد الشهر الجاي، وباقي مزايا مُدار متاحة لك.")
     with db.tx() as con:
         r = assistant.chat(con, user["id"], body.message)
         db.audit(con, user["hash"], "chat", {"tools": r["tools"]})   # log tools used, not the message
@@ -447,10 +606,10 @@ def demo_next_month(user=Depends(current_user)):
 
 
 @app.post("/api/demo/reset")
-def demo_reset(request: Request):
+def demo_reset(request: Request, authorization: Optional[str] = Header(default=None)):
     if not DEMO_MODE:
         raise HTTPException(404, "المسار غير متاح.")
-    return consent(ConsentIn(bank_id="demo1"), request)
+    return consent(ConsentIn(bank_id="demo1"), request, authorization)
 
 
 # ---------- optional: serve the front end ----------
