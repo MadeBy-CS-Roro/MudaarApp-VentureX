@@ -63,6 +63,22 @@ def test_confirm_plan_edits_update_plans_and_monthly_summary(client):
     assert before_salary["plans"][0]["name"] == "تمارا"
 
 
+def test_confirm_plan_with_zero_remaining_is_not_counted(client):
+    response = client.post("/api/plans/tamara/confirm", json={"remaining": 0})
+    assert response.status_code == 200
+    confirmed = {p["id"]: p for p in response.json()["plans"]}["tamara"]
+    assert confirmed["remaining"] == 0
+    assert confirmed["confirmed"] is True
+
+    plans = {p["id"]: p for p in client.get("/api/plans").json()["plans"]}
+    assert plans["tamara"]["remaining"] == 0
+
+    summary = client.get("/api/summary").json()
+    assert "tamara" not in {p["id"] for p in summary["plans"]}
+    assert summary["formula"]["obligations"] == 3500
+    assert summary["safe_to_spend"] == 1200
+
+
 @pytest.mark.parametrize(
     ("correction", "expected_amount", "expected_remaining"),
     [
