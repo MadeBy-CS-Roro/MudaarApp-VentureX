@@ -1,0 +1,41 @@
+I uploaded mawid_app.zip. It contains a complete, working app called Mawid (موعد):
+a FastAPI + SQLite backend with an Arabic RTL mobile web front end in static/index.html.
+The code is already written and tested. Your job is to set it up and run it, NOT to rewrite it.
+
+SETUP
+1. Unzip mawid_app.zip and move everything from the mawid_backend/ folder to the project root
+   (main.py, engine.py, detect.py, service.py, assistant.py, security.py, db.py, provider.py,
+   requirements.txt, README.md, tests/, static/).
+2. Install dependencies: pip install -r requirements.txt
+3. Set the run command (in .replit) to:
+   uvicorn main:app --host 0.0.0.0 --port 8000
+   and make sure port 8000 is exposed as the web preview.
+4. Secrets are already in Replit Secrets: HMAC_KEY, SIGNING_SECRET, ANTHROPIC_API_KEY.
+   Read them only from environment variables. Never write secret values into code or files.
+5. Run: pytest -q
+   All 7 tests must pass. If one fails, fix the setup problem (paths, imports, missing package),
+   not the test and not the expected numbers.
+
+VERIFY (open the preview and check each step)
+1. First screen: "اربط حسابك مرة وحدة". Pick a bank, approve, and 4 plans are found.
+   Confirm all 4, then go to the dashboard.
+2. Dashboard shows: salary 8,700; obligations 4,100; can spend 180 (of 600, spent 420);
+   a warning that Tamara (600) is due before salary; good news that Tabby ends this month.
+3. مخطط الشراء with price 3000: 4 payments shows short by 570 this month and
+   "يصير مناسب الشهر الجاي". Save first shows "بعد 3 شهور".
+4. المساعد: the suggested questions get answers, and each answer shows "engine: ..." tools.
+   Also test a free-form question like "وش أكثر شي أصرف عليه؟". GET /api/health should show "llm": true.
+5. قائمة الأمنيات: add the phone (4 payments), press "انتقل للشهر الجاي",
+   and 3 notifications appear (salary, Tabby ended, phone is now affordable).
+6. Test on a phone-sized screen (390px wide): bottom tab bar visible, no horizontal scrolling.
+
+RULES
+- Do not change engine.py math or the demo data in provider.py.
+  The pitch depends on these exact numbers.
+- Do not replace API calls with mock or hardcoded data in the front end.
+- Keep the UI Arabic, right-to-left, with the existing purple/teal design.
+- Do not add paid subscription plans, Clerk, or any login provider.
+- Do not add localStorage for app data. Only the session token is stored.
+- If something doesn't work, show me the error and the fix before making big changes.
+
+When done, give me the public URL and a short list of anything you had to change.
