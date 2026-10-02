@@ -12,6 +12,12 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 - Tests: `python -m pytest -q`. Tests use a separate temporary SQLite database.
 - Post-merge setup: `scripts/post-merge.sh` installs dependencies and runs tests non-interactively; Replit then reconciles workflows. It does not reset or migrate the runtime database.
 
+## Publishing
+
+- Publishing must start the ASGI server: `python -m uvicorn main:app --host 0.0.0.0 --port 5000`. Running `python main.py` alone only imports the app and exits.
+- Publishing settings take effect only after republishing.
+- The current publishing target is Autoscale. The local SQLite database is suitable for a resettable demo, not durable published user data: the published filesystem is not persistent. Do not migrate the database or change deployment type without approval.
+
 ## Configuration
 
 - Required secrets: `HMAC_KEY` and `SIGNING_SECRET`, with distinct long random values. Both are configured in Replit Secrets; never commit their values.
