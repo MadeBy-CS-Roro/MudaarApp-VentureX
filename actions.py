@@ -54,7 +54,12 @@ def summary(con, user_id: int, tool: str, p: dict) -> str:
     if tool == "add_to_wishlist":
         methods = {"cash": "كاش", "bnpl3": "3 دفعات", "bnpl4": "4 دفعات", "bnpl6": "6 شهور",
                    "fin12": "تمويل 12 شهر", "save": "تجمع أول"}
-        return f"نحط «{p['name']}» بـ {p['price']:g} ر.س بالأمنيات، بطريقة {methods[p['method']]}؟"
+        label = methods.get(p["method"])
+        if label is None and p["method"].startswith("loan:"):
+            import loans
+            _, lid, months = p["method"].split(":")
+            label = f"تمويل {loans.lender(lid)['name']} {months} شهر"
+        return f"نحط «{p['name']}» بـ {p['price']:g} ر.س بالأمنيات، بطريقة {label or p['method']}؟"
     if tool == "remove_from_wishlist":
         row = con.execute("SELECT name FROM wishlist WHERE user_id=? AND id=?", (user_id, p["item_id"])).fetchone()
         if not row:

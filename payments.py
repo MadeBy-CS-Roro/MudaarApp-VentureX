@@ -18,7 +18,11 @@ PROVIDER_SITES = {"TAMARA": ("تمارا", "https://tamara.co"), "TABBY": ("تا
 
 
 def default_mode(merchant: str, kind: str) -> str:
-    return "auto" if AUTO_PATTERN.search(merchant or "") or kind == "loan" and not merchant.startswith("MANUAL:") else "manual"
+    if kind == "subscription":
+        return "auto"                      # charged to the card automatically
+    if AUTO_PATTERN.search(merchant or "") or (kind == "loan" and not (merchant or "").startswith("MANUAL:")):
+        return "auto"
+    return "manual"
 
 
 def mode_of(row) -> str:
@@ -87,3 +91,31 @@ def pay(con, user_id: int, item_ids: list[str], demo_mode: bool) -> dict:
 
 def set_mode(con, user_id: int, plan_id: str, mode: str) -> bool:
     return con.execute("UPDATE plans SET pay_mode=? WHERE user_id=? AND id=?", (mode, user_id, plan_id)).rowcount > 0
+
+
+def set_flags(con, user_id: int, plan_id: str, remind: bool | None, cancel_planned: bool | None) -> bool:
+    row = con.execute("SELECT 1 FROM plans WHERE user_id=? AND id=?", (user_id, plan_id)).fetchone()
+    if not row:
+        return False
+    if remind is not None:
+        con.execute("UPDATE plans SET remind=? WHERE user_id=? AND id=?", (int(remind), user_id, plan_id))
+    if cancel_planned is not None:
+        con.execute("UPDATE plans SET cancel_planned=? WHERE user_id=? AND id=?", (int(cancel_planned), user_id, plan_id))
+    return True
+
+
+def mark_cancelled(con, user_id: int, plan_id: str) -> dict:
+    """User cancelled a subscription at the provider. If this month's charge already happened it stays
+    counted this month and moves to previous payments next month; otherwise it stops now."""
+    row = con.execute("SELECT * FROM plans WHERE user_id=? AND id=?", (user_id, plan_id)).fetchone()
+    if not row:
+        raise HTTPException(404, "الاشتراك مو موجود.")
+    if row["kind"] != "subscription":
+        raise HTTPException(422, "هذا مو اشتراك.")
+    s = service.snapshot(con, user_id)
+    due_date = E.due_date_in_cycle(row["day"], s.current, s.profile.salary_day)
+    charged = due_date < s.extra["today"]
+    until = s.current if charged else s.current - 1
+    con.execute("UPDATE plans SET active_until=?, cancelled_at=?, cancel_planned=0 WHERE user_id=? AND id=?",
+                (until, s.extra["today"].isoformat(), user_id, plan_id))
+    return {"ok": True, "charged_this_month": charged, "name": row["name"], "saves": row["amount"]}

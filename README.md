@@ -1,5 +1,7 @@
 # مُدار (Mudar)
 
+The latest uploaded version includes Arabic/English switching, multiple demo bank connections, subscription renewal/cancellation controls, and sample personal-loan comparisons. Saved data is preserved through additive migrations. SMS, bank connections, payments and lender offers remain demo-only; do not treat sample rates as real offers.
+
 FastAPI + SQLite. The engine does all the math. The assistant only explains tool results.
 
 ## Run on Replit

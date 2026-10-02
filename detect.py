@@ -21,6 +21,7 @@ CATEGORIES = {
 ALL_CATEGORIES = {f"{group}:{name}" for group, names in CATEGORIES.items() for name in names}
 
 RULES = [
+    (r"NETFLIX|SHAHID|SPOTIFY|ANGHAMI|DISNEY|OSN|APPLE\.COM|ICLOUD|YOUTUBE|STARZPLAY", "subscription"),
     (r"PANDA|TAMIMI|DANUBE|OTHAIM|CARREFOUR|LULU|NESTO|BINDAWOOD", "essential:بقالة"),
     (r"ALDREES|SASCO|PETROMIN|NAFT|\bADES\b", "essential:وقود"),
     (r"ELECTRICITY|NATIONAL WATER|\bSEC\b|\bNWC\b", "essential:فواتير"),
@@ -33,7 +34,6 @@ RULES = [
     (r"JAHEZ|HUNGERSTATION|MRSOOL|KEETA|TOYOU|NINJA", "flexible:توصيل"),
     (r"NOON|AMAZON|SHEIN|CENTERPOINT|NAMSHI|MAX FASHION|H&M|ZARA", "flexible:تسوق وملابس"),
     (r"CINEMA|VOX|MUVI|BOULEVARD|PLAYSTATION|STEAM", "flexible:ترفيه"),
-    (r"NETFLIX|SHAHID|SPOTIFY|ANGHAMI|APPLE\.COM|ICLOUD|YOUTUBE", "flexible:اشتراكات رقمية"),
     (r"SAUDIA|FLYNAS|FLYADEAL|BOOKING|AIRBNB|ALMOSAFER|HOTEL", "flexible:سفر"),
     (r"SALON|BARBER|SPA|SEPHORA|NICE ONE", "flexible:عناية شخصية"),
     (r"FLOWERS|GIFT|HADAYA", "flexible:هدايا ومناسبات"),
@@ -49,6 +49,16 @@ PROVIDERS = {
               "action": {"kind": "url", "label": "افتح تابي", "url": "https://tabby.ai"}},
     "AUTO FINANCE": {"name": "تمويل السيارة", "kind": "loan", "default_total": None,
                      "action": {"kind": "url", "label": "افتح تطبيق البنك", "url": "#"}},
+    "NETFLIX": {"name": "نتفليكس", "kind": "subscription", "default_total": None,
+                "action": {"kind": "url", "label": "إدارة الاشتراك", "url": "https://www.netflix.com"}},
+    "SHAHID": {"name": "شاهد VIP", "kind": "subscription", "default_total": None,
+               "action": {"kind": "url", "label": "إدارة الاشتراك", "url": "https://shahid.mbc.net"}},
+    "SPOTIFY": {"name": "سبوتيفاي", "kind": "subscription", "default_total": None,
+                "action": {"kind": "url", "label": "إدارة الاشتراك", "url": "https://www.spotify.com"}},
+    "DISNEY": {"name": "ديزني+", "kind": "subscription", "default_total": None,
+               "action": {"kind": "url", "label": "إدارة الاشتراك", "url": "https://www.disneyplus.com"}},
+    "ANGHAMI": {"name": "أنغامي", "kind": "subscription", "default_total": None,
+                "action": {"kind": "url", "label": "إدارة الاشتراك", "url": "https://www.anghami.com"}},
     "EJAR": {"name": "الإيجار", "kind": "recurring", "default_total": None,
              "action": {"kind": "copy", "label": "انسخ رقم السداد", "value_from": r"SADAD (\d+)"}},
 }
@@ -80,7 +90,7 @@ _SEQ = re.compile(r"(\d{1,3})\s*/\s*(\d{1,3})")
 def detect_plans(txs: list[dict], salary_day: int) -> list[dict]:
     groups: dict[str, list[dict]] = defaultdict(list)
     for t in txs:
-        if t["direction"] == "debit" and categorize(t["merchant"], t["description"]) == "installment":
+        if t["direction"] == "debit" and categorize(t["merchant"], t["description"]) in ("installment", "subscription"):
             groups[t["merchant"].upper()].append(t)
 
     plans = []

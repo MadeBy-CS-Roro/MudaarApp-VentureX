@@ -15,7 +15,48 @@ SCOPES = ["accounts:read", "balances:read", "transactions:read"]
 _CYCLE_STARTS = [date(2026, 6, 27), date(2026, 7, 27), date(2026, 8, 27), date(2026, 9, 27)]
 
 
+BANK_NAMES = {"demo1": "بنك تجريبي أ", "demo2": "بنك تجريبي ب", "demo3": "بنك تجريبي ج"}
+
+
+def bank_name(bank_id: str | None) -> str:
+    return BANK_NAMES.get(bank_id or "", bank_id or "يدوي")
+
+
 def fetch_transactions(bank_id: str, until: date = DEMO_TODAY) -> list[dict]:
+    """Each demo bank returns its own accounts. demo1 = salary account (the pitch numbers)."""
+    if bank_id == "demo2":
+        return _card_account(until)
+    if bank_id == "demo3":
+        return _savings_account(until)
+    return _salary_account(until)
+
+
+def _card_account(until: date) -> list[dict]:
+    """Second bank: a credit card that pays the streaming subscriptions.
+    Netflix renews on the 26th, two days after demo "today": the renewal reminder fires."""
+    t: list[dict] = []
+    for month in (7, 8, 9, 10):
+        for day, amount, merchant in ((5, 20, "SPOTIFY"), (12, 25, "SHAHID"), (26, 55, "NETFLIX")):
+            d = date(2026, month, day)
+            if d <= until:
+                t.append({"date": d, "amount": float(amount), "merchant": merchant,
+                          "description": f"{merchant} SUBSCRIPTION", "direction": "debit"})
+    for d, amount, merchant in ((date(2026, 8, 14), 32, "BARNS"), (date(2026, 9, 9), 45, "BARNS"),
+                                (date(2026, 10, 20), 18, "BARNS")):
+        if d <= until:
+            t.append({"date": d, "amount": float(amount), "merchant": merchant,
+                      "description": "CARD PURCHASE", "direction": "debit"})
+    return sorted(t, key=lambda x: x["date"])
+
+
+def _savings_account(until: date) -> list[dict]:
+    """Third bank: a mostly idle account with one past purchase."""
+    t = [{"date": date(2026, 8, 18), "amount": 150.0, "merchant": "NOON", "description": "ONLINE PURCHASE",
+          "direction": "debit"}]
+    return [x for x in t if x["date"] <= until]
+
+
+def _salary_account(until: date = DEMO_TODAY) -> list[dict]:
     t: list[dict] = []
 
     def add(d, amount, merchant, desc, direction="debit"):

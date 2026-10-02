@@ -114,7 +114,7 @@ WishIn = inputs.WishIn
 
 class WishUpdate(BaseModel):
     price: Optional[float] = Field(default=None, gt=0, le=1_000_000)
-    method: Optional[Literal["cash", "bnpl3", "bnpl4", "bnpl6", "fin12", "save"]] = None
+    method: Optional[str] = Field(default=None, pattern=r"^(cash|bnpl3|bnpl4|bnpl6|fin12|save|loan:[a-z_]+:\d{1,2})$")
 
 class CategoryIn(BaseModel):
     merchant: str = Field(min_length=1, max_length=80)
@@ -149,6 +149,7 @@ class ExpenseIn(BaseModel):
 
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=500)
+    lang: Literal["ar", "en"] = "ar"
 
 PlanIn = inputs.PlanIn
 ContactIn = inputs.ContactIn
@@ -356,7 +357,13 @@ def pay_all(plan_id: str, user=Depends(current_user)):
 
 
 class PayModeIn(BaseModel):
-    pay_mode: Literal["auto", "manual"]
+    model_config = ConfigDict(extra="forbid")
+    pay_mode: Optional[Literal["auto", "manual"]] = None
+    remind: Optional[bool] = None
+    cancel_planned: Optional[bool] = None
+
+class BankIn(BaseModel):
+    bank_id: str = Field(min_length=1, max_length=40, pattern=r"^[a-z0-9_]+$")
 
 class PayIn(BaseModel):
     item_ids: list[str] = Field(min_length=1, max_length=30)
@@ -364,11 +371,50 @@ class PayIn(BaseModel):
 
 @app.patch("/api/plans/{plan_id}")
 def patch_plan(plan_id: str, body: PayModeIn, user=Depends(current_user)):
+    if body.pay_mode is None and body.remind is None and body.cancel_planned is None:
+        raise HTTPException(422, "ما فيه شي نعدّله.")
     with db.tx() as con:
-        if not payments.set_mode(con, user["id"], plan_id, body.pay_mode):
+        found = payments.set_flags(con, user["id"], plan_id, body.remind, body.cancel_planned)
+        if body.pay_mode is not None:
+            found = payments.set_mode(con, user["id"], plan_id, body.pay_mode)
+        if not found:
             raise HTTPException(404, "الالتزام مو موجود.")
-        db.audit(con, user["hash"], "plan.pay_mode", {"plan": plan_id, "mode": body.pay_mode})
+        db.audit(con, user["hash"], "plan.updated", {"plan": plan_id, **body.model_dump(exclude_none=True)})
         return payments.due(con, user["id"])
+
+
+@app.post("/api/plans/{plan_id}/cancelled")
+def plan_cancelled(plan_id: str, user=Depends(current_user)):
+    with db.tx() as con:
+        out = payments.mark_cancelled(con, user["id"], plan_id)
+        db.audit(con, user["hash"], "subscription.cancelled", {"plan": plan_id})
+        return out
+
+
+@app.get("/api/banks")
+def get_banks(user=Depends(current_user)):
+    with db.tx() as con:
+        return {"banks": service.banks(con, user["id"]),
+                "available": [{"bank_id": k, "name": v} for k, v in service.provider.BANK_NAMES.items()]}
+
+
+@app.post("/api/banks")
+def post_bank(body: BankIn, request: Request, user=Depends(current_user)):
+    if not DEMO_MODE:
+        raise HTTPException(501, "ربط بنك ثاني يحتاج مزود مصرفية مفتوحة مرخص.")
+    with db.tx() as con:
+        out = service.add_bank(con, user["id"], body.bank_id)
+        db.audit(con, user["hash"], "consent.granted", {"bank": body.bank_id, "consent_id": out["consent_id"],
+                                                       "plans_found": len(out["plans"])})
+        return {**out, "banks": service.banks(con, user["id"])}
+
+
+@app.delete("/api/banks/{bank_id}")
+def delete_bank(bank_id: str, user=Depends(current_user)):
+    with db.tx() as con:
+        out = service.remove_bank(con, user["id"], bank_id)
+        db.audit(con, user["hash"], "consent.revoked", {"bank": bank_id})
+        return {**out, "banks": service.banks(con, user["id"])}
 
 
 @app.get("/api/payments/due")
@@ -578,7 +624,7 @@ def post_chat(body: ChatIn, user=Depends(current_user)):
         if not service.consume_chat_question(con, user["id"]):
             raise HTTPException(429, "خلصت أسئلتك المجانية هالشهر. تتجدد الشهر الجاي، وباقي مزايا مُدار متاحة لك.")
     with db.tx() as con:
-        r = assistant.chat(con, user["id"], body.message)
+        r = assistant.chat(con, user["id"], body.message, body.lang)
         db.audit(con, user["hash"], "chat", {"tools": r["tools"]})   # log tools used, not the message
         return r
 

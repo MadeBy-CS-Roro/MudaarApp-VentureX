@@ -47,7 +47,18 @@ class UpdatePlanIn(Input):
 class WishIn(Input):
     name: str = Field(min_length=1, max_length=60)
     price: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
-    method: Literal["cash", "bnpl3", "bnpl4", "bnpl6", "fin12", "save"]
+    method: str = Field(pattern=r"^(cash|bnpl3|bnpl4|bnpl6|fin12|save|loan:[a-z_]+:\d{1,2})$")
+
+    @field_validator("method")
+    @classmethod
+    def known_lender(cls, value):
+        if value.startswith("loan:"):
+            import loans
+            _, lid, months = value.split(":")
+            lend = loans.lender(lid)
+            if not lend or int(months) not in lend["tenors"]:
+                raise ValueError("الجهة أو المدة مو موجودة.")
+        return value
 
 
 class DeletePlanIn(Input):

@@ -10,6 +10,8 @@ const fmt = n => Math.round(Number(n) || 0).toLocaleString("en-US");
 const money = n => `<span class="num">${fmt(n)}</span> ر.س`;
 const toNum = s => Number(String(s ?? "").replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d.]/g, "")) || 0;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const T = s => (window.I18N && I18N.lang === "en" ? I18N.tr(s) : s);
+const ask = s => confirm(T(s));
 
 function counted(n, kind = "payments") {
   const f = kind === "days"
@@ -61,7 +63,7 @@ function toast(html, kind = "", ms = 5000) {
 /* ===================== API ===================== */
 const S = {
   token: null, me: null, demo: true,
-  chat: [], planner: { name: "جوال", price: "3000", months: "", chosen: null, others: false },
+  chat: [], planner: { name: (() => { try { return localStorage.getItem("mudar_lang") === "en" ? "Phone" : "جوال"; } catch (_) { return "جوال"; } })(), price: "3000", months: "", chosen: null, others: false },
   obTab: "current", lastPhone: "", demoCode: "", authFlow: null
 };
 try { S.token = localStorage.getItem("mawid_token"); } catch (_) {}
@@ -102,7 +104,7 @@ function applyTheme(t) {
   document.documentElement.dataset.theme = theme;
   try { localStorage.setItem("mudar_theme", theme); } catch (_) {}
   const dark = theme === "dark" || (theme === "system" && !matchMedia("(prefers-color-scheme: light)").matches);
-  $('meta[name="theme-color"]').setAttribute("content", dark ? "#1c1a28" : "#f4f2fb");
+  $('meta[name="theme-color"]').setAttribute("content", dark ? "#1f1d26" : "#f4f2fb");
 }
 
 /* ===================== sheets ===================== */
@@ -131,10 +133,76 @@ function screen(html) {
 }
 function closeScreen() { const s = $("#screen"); if (s) s.remove(); }
 
+let LOGO_ID = 0;
+function logoSVG(cls = "") {
+  const id = "arcg" + (++LOGO_ID);
+  return `<svg class="mark ${cls}" viewBox="0 0 240 240" role="img" aria-label="شعار مُدار">
+    <defs><linearGradient id="${id}" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6a4bdc"/><stop offset=".55" stop-color="#9b82f2"/><stop offset="1" stop-color="#c4b5ff"/></linearGradient></defs>
+    <circle class="trk" cx="120" cy="120" r="100" fill="none" stroke-width="9"/>
+    <circle class="arc" cx="120" cy="120" r="100" fill="none" stroke="url(#${id})" stroke-width="9" stroke-linecap="round" stroke-dasharray="471 628" transform="rotate(-90 120 120)"/>
+    <text class="d-letter" x="132" y="96" font-size="56" text-anchor="middle">و</text>
+    <text class="m-letter" x="120" y="182" font-size="100" text-anchor="middle">م</text>
+    <g class="orbit"><circle class="planet" cx="20" cy="120" r="13"/></g>
+  </svg>`;
+}
+
+/* Opening animation: the orbit draws itself, the planet travels around it, the meem rises,
+   the damma drops in, then the logo flies up into the welcome screen. Tap to skip (the planet spins). */
+function splash() {
+  return new Promise(resolve => {
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const el = document.createElement("div");
+    el.className = "splash";
+    el.setAttribute("role", "presentation");
+    el.innerHTML = `<div class="stage">${logoSVG()}</div><div class="word">مُدار</div>
+      <div class="tag">التزاماتك، مصاريفك، وراتبك بمكان واحد</div><div class="skip">اضغط للتخطي</div>`;
+    document.body.appendChild(el);
+    let done = false;
+    const finish = () => {
+      if (done) return; done = true;
+      el.classList.add("out");
+      setTimeout(() => el.remove(), 750);
+      resolve();
+    };
+    el.addEventListener("click", () => { el.classList.add("spin"); setTimeout(finish, 420); });
+    setTimeout(finish, reduce ? 250 : 2700);
+  });
+}
+
+/* Welcome logo: drag the planet around its orbit; it springs back home. Tap for a spin. */
+function bindOrbit(wrap) {
+  const orbit = $(".orbit", wrap);
+  let dragging = false, moved = false;
+  const angle = e => {
+    const r = wrap.getBoundingClientRect();
+    return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * 180 / Math.PI;
+  };
+  wrap.addEventListener("pointerdown", e => { dragging = true; moved = false; wrap.classList.add("dragging"); wrap.setPointerCapture(e.pointerId); });
+  wrap.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    moved = true;
+    orbit.style.transform = `rotate(${angle(e) - 180}deg)`;
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false; wrap.classList.remove("dragging");
+    if (!moved) {
+      orbit.style.transition = "transform .8s cubic-bezier(.65,0,.35,1)";
+      orbit.style.transform = "rotate(360deg)";
+      setTimeout(() => { orbit.style.transition = "none"; orbit.style.transform = "rotate(0deg)"; requestAnimationFrame(() => (orbit.style.transition = "")); }, 820);
+    } else {
+      orbit.style.transform = "rotate(0deg)";
+    }
+  };
+  wrap.addEventListener("pointerup", end);
+  wrap.addEventListener("pointercancel", end);
+}
+
 function showWelcome() {
   const el = screen(`
-    <div class="logo-big">م</div>
-    <h1 class="brand-name">مُدار</h1>
+    <div class="orbit-play" id="orbit-play">${logoSVG()}</div>
+    <p class="orbit-hint">حرّك الكوكب حول مداره</p>
+    <h1 class="brand-name lavender">مُدار</h1>
     <p class="brand-tag">التزاماتك، مصاريفك، وراتبك بمكان واحد</p>
     <div class="stack" style="margin-top:auto">
       <button class="btn block" data-go="signup">إنشاء حساب</button>
@@ -143,6 +211,7 @@ function showWelcome() {
       <button class="btn ghost block" disabled>الدخول عبر نفاذ (قريباً)</button>
       <p class="muted" style="text-align:center;margin:6px 0 0">بيانات وهمية للهاكاثون</p>
     </div>`);
+  bindOrbit($("#orbit-play", el));
   el.addEventListener("click", async e => {
     const go = e.target.closest("[data-go]")?.dataset.go;
     if (go === "signup") showSignup();
@@ -284,13 +353,14 @@ function showOtp() {
 
 /* ===================== bank connection (onboarding) ===================== */
 function showBankConnect() {
-  const banks = [["demo1", "بنك تجريبي أ"], ["demo2", "بنك تجريبي ب"], ["demo3", "بنك تجريبي ج"]];
-  let picked = null;
+  const banks = [["demo1", "بنك تجريبي أ", "حساب الراتب"], ["demo2", "بنك تجريبي ب", "بطاقة ائتمانية"], ["demo3", "بنك تجريبي ج", "حساب توفير"]];
+  const picked = new Set(["demo1"]);
   const el = screen(`
-    <div class="logo-big" style="margin-top:10px;width:64px;height:64px;font-size:30px;border-radius:20px">م</div>
-    <h1 class="page-title" style="text-align:center">اربط حسابك مرة وحدة</h1>
-    <p class="page-sub" style="text-align:center">نقرأ عملياتك عشان نلقى التزاماتك ونفهم مصاريفك. ما نقدر نحوّل ولا ندفع.</p>
-    <div id="banks">${banks.map(([id, n]) => `<button class="bank" data-bank="${id}" aria-pressed="false"><span class="ico">${ic("bank")}</span>${n}</button>`).join("")}</div>
+    <div style="width:84px;margin:6px auto 0">${logoSVG()}</div>
+    <h1 class="page-title" style="text-align:center;margin-top:10px">اربط حساباتك البنكية</h1>
+    <p class="page-sub" style="text-align:center">اختر كل البنوك اللي تستخدمها، عشان نشوف كل التزاماتك واشتراكاتك بمكان واحد. ما نقدر نحوّل ولا ندفع.</p>
+    <div id="banks">${banks.map(([id, n, sub]) => `<button class="bank multi" data-bank="${id}" aria-pressed="${picked.has(id)}">
+      <span class="ico">${ic("bank")}</span><span><b>${n}</b><br><span class="muted">${sub}</span></span></button>`).join("")}</div>
     <div class="card tight">
       <h2>وش اللي بتوافق عليه</h2>
       <ul class="perm">
@@ -300,23 +370,34 @@ function showBankConnect() {
         <li><span class="teal">✓</span>تقدر تلغي الموافقة بأي وقت، وتنتهي لحالها بعد 90 يوم</li>
       </ul>
     </div>
-    <button class="btn block" id="approve" disabled>وافق من تطبيق البنك</button>
+    <button class="btn block" id="approve">وافق من تطبيق البنك (${picked.size})</button>
     <button class="link-btn" style="margin:14px auto 0" data-act="logout">تسجيل الخروج</button>`);
   el.addEventListener("click", async e => {
     const b = e.target.closest("[data-bank]");
-    if (b) { picked = b.dataset.bank; $$("[data-bank]", el).forEach(x => x.setAttribute("aria-pressed", x === b)); $("#approve").disabled = false; }
+    if (b) {
+      picked.has(b.dataset.bank) ? picked.delete(b.dataset.bank) : picked.add(b.dataset.bank);
+      b.setAttribute("aria-pressed", picked.has(b.dataset.bank));
+      $("#approve").textContent = picked.size ? `وافق من تطبيق البنك (${picked.size})` : "اختر بنك واحد على الأقل";
+      $("#approve").disabled = !picked.size;
+    }
     if (e.target.closest('[data-act="logout"]')) logout();
-    if (e.target.closest("#approve") && picked) connect(picked);
+    if (e.target.closest("#approve") && picked.size) connect([...picked]);
   });
 }
 
-async function connect(bankId) {
+async function connect(bankIds) {
   const el = screen(`<div class="spinner"></div><p style="text-align:center" id="load-text">ننتظر موافقتك من تطبيق البنك…</p>`);
-  const steps = ["ننتظر موافقتك من تطبيق البنك…", "نقرأ عملياتك…", "نكتشف التزاماتك ونصنف مصاريفك…"];
-  steps.forEach((s, i) => setTimeout(() => { const t = $("#load-text", el); if (t) t.textContent = s; }, i * 700));
+  const say = t => { const x = $("#load-text", el); if (x) x.textContent = t; };
   try {
-    const [r] = await Promise.all([api("/api/consent", { method: "POST", body: { bank_id: bankId } }), sleep(2100)]);
+    const [first, ...rest] = bankIds;
+    const [r] = await Promise.all([api("/api/consent", { method: "POST", body: { bank_id: first } }), sleep(900)]);
     setToken(r.token);
+    for (const id of rest) {
+      say(`نربط ${id === "demo2" ? "بنك تجريبي ب" : id === "demo3" ? "بنك تجريبي ج" : "البنك"}…`);
+      await Promise.all([api("/api/banks", { method: "POST", body: { bank_id: id } }), sleep(600)]);
+    }
+    say("نكتشف التزاماتك واشتراكاتك ونصنف مصاريفك…");
+    await sleep(700);
     showDetected();
   } catch (err) { showBankConnect(); handleError(err); }
 }
@@ -416,17 +497,62 @@ function alertBox(a) {
 const alertsHtml = list => list.map(alertBox).filter(Boolean).map(a => `<div class="alert ${a.cls}">${ic(a.icon)}<div>${a.text}</div></div>`).join("");
 
 /* ===================== HOME ===================== */
+function ringSvg(fraction, cls = "") {
+  const R = 96, C = 2 * Math.PI * R, f = Math.max(0, Math.min(1, fraction));
+  return `<svg viewBox="0 0 224 224"><circle class="track" cx="112" cy="112" r="${R}" fill="none" stroke-width="18"/>
+    <circle class="fill ${cls}" cx="112" cy="112" r="${R}" fill="none" stroke-width="18" stroke-linecap="round"
+      stroke-dasharray="${C}" stroke-dashoffset="${C}" data-target="${C * (1 - f)}"/></svg>`;
+}
+function animateRings(root = document) {
+  requestAnimationFrame(() => $$(".ring .fill", root).forEach(f => (f.style.strokeDashoffset = f.dataset.target)));
+}
+
 async function renderHome() {
   const [s, w] = await Promise.all([api("/api/summary"), wishState()]);
   const days = s.salary.days_left;
-  topbar(`<div class="who"><span class="avatar">${esc((s.display_name || "م").trim().charAt(0))}</span>
+  topbar(`<div class="who"><span class="avatar">${esc(T(s.display_name || "م").trim().charAt(0))}</span>
       <div><b>هلا ${esc(s.display_name || "")}</b><small>${days <= 0 ? "الراتب اليوم" : `الراتب بعد ${counted(days, "days")}`}</small></div></div>
     ${heartBtn(w.count, w.ready)}`);
 
+  /* slide 1: what's left to spend */
   const safe = Math.max(0, s.safe_to_spend), avail = s.available;
-  const pct = safe > 0 ? Math.max(0, Math.min(1, avail / safe)) : 0;
-  const R = 96, C = 2 * Math.PI * R;
+  const pct = safe > 0 ? avail / safe : 0;
+  const slide1 = `<section class="card ring-card slide" aria-label="باقي لك">
+      <div class="ring">${ringSvg(avail < 0 ? 1 : pct, avail < 0 ? "neg" : "")}
+        <div class="ring-center"><span class="k">${avail < 0 ? "تعدّيت بـ" : "باقي لك"}</span>
+          <span class="v num ${avail < 0 ? "neg" : ""}">${fmt(Math.abs(avail))}</span>
+          <span class="of">ر.س من <span class="num">${fmt(s.safe_to_spend)}</span></span></div></div>
+      <p class="ring-foot">صرفت ${money(s.spent)} من مصروفك لهالشهر</p>
+    </section>`;
+
+  /* slide 2: this month's obligations — paid vs left */
+  const plans = s.plans;
+  const dueTotal = plans.reduce((a, p) => a + p.amount, 0);
+  const paid = plans.filter(p => p.status === "paid").reduce((a, p) => a + p.amount, 0);
+  const left = dueTotal - paid;
+  const slide2 = `<section class="card ring-card slide" aria-label="التزاماتك هالشهر">
+      <div class="ring">${ringSvg(dueTotal ? paid / dueTotal : 0, "v")}
+        <div class="ring-center"><span class="k">دفعت هالشهر</span>
+          <span class="v num lav" style="font-size:48px">${fmt(paid)}</span>
+          <span class="of">ر.س من <span class="num">${fmt(dueTotal)}</span></span></div></div>
+      <p class="ring-foot">${left > 0 ? `باقي عليك ${money(left)} هالشهر` : "سدّدت كل التزامات هالشهر ✓"}</p>
+      <div class="mini-list">${plans.slice(0, 6).map(p => `<span class="badge ${p.status === "paid" ? "b-paid" : "b-upcoming"}">${p.status === "paid" ? "✓" : "•"} ${esc(p.name)}</span>`).join("")}</div>
+    </section>`;
+
+  /* slide 3: living expenses recorded this month vs the usual average */
+  const en = s.essentials_now || { total: 0, average: 0, by_category: {} };
+  const top = Object.entries(en.by_category).slice(0, 4);
+  const slide3 = `<section class="card ring-card slide" aria-label="المعيشة هالشهر">
+      <div class="ring">${ringSvg(en.average ? en.total / en.average : 0, en.total > en.average ? "neg" : "g")}
+        <div class="ring-center"><span class="k">المعيشة هالشهر</span>
+          <span class="v num gold" style="font-size:48px">${fmt(en.total)}</span>
+          <span class="of">ر.س من متوسطك <span class="num">${fmt(en.average)}</span></span></div></div>
+      <p class="ring-foot">${en.total > en.average ? `أعلى من العادة بـ ${money(en.total - en.average)}` : en.total === en.average ? "مثل المعتاد بالضبط" : `أقل من المعتاد بـ ${money(en.average - en.total)} للحين`}</p>
+      <div class="mini-list">${top.map(([k, v]) => `<span class="badge b-grey">${esc(k)} ${fmt(v)}</span>`).join("")}</div>
+    </section>`;
+
   const before = s.alerts.find(a => a.type === "before_salary");
+  const renew = s.alerts.find(a => a.type === "subscription_renewal");
   const ending = s.alerts.find(a => a.type === "plan_ending");
   const next = s.plans.find(p => p.status === "upcoming");
 
@@ -437,30 +563,25 @@ async function renderHome() {
       ? `<a class="card tight small-card tap" href="#obligations" style="text-decoration:none"><span class="dot-label violet">الدفعة الجاية</span>
           <div><div class="big">${money(next.amount)}</div><div class="muted">${esc(next.name)}، ${whenDays(next.days_until)}</div></div></a>`
       : `<div class="card tight small-card"><span class="dot-label teal">ما عليك شي</span><div><div class="big">ولا دفعة</div><div class="muted">قبل الراتب</div></div></div>`;
-  const card2 = ending
-    ? `<a class="card tight small-card tap" href="#obligations" style="text-decoration:none"><span class="dot-label teal">خبر حلو</span>
-        <div><div class="big">${esc(ending.name)} تخلص</div><div class="muted">هالشهر</div></div></a>`
-    : `<a class="card tight small-card tap" href="#obligations" style="text-decoration:none"><span class="dot-label violet">التزاماتك</span>
-        <div><div class="big">${money(s.obligations_total)}</div><div class="muted">شهرياً</div></div></a>`;
+  const card2 = renew
+    ? `<a class="card tight small-card tap" href="#obligations" style="text-decoration:none"><span class="dot-label gold">يتجدد ${whenDays(renew.days_until)}</span>
+        <div><div class="big">${esc(renew.name)}</div><div class="muted">${money(renew.amount)}، ألغه لو ما تبيه</div></div></a>`
+    : ending
+      ? `<a class="card tight small-card tap" href="#obligations" style="text-decoration:none"><span class="dot-label teal">خبر حلو</span>
+          <div><div class="big">${esc(ending.name)} تخلص</div><div class="muted">هالشهر</div></div></a>`
+      : `<a class="card tight small-card tap" href="#obligations" style="text-decoration:none"><span class="dot-label violet">التزاماتك</span>
+          <div><div class="big">${money(s.obligations_total)}</div><div class="muted">شهرياً</div></div></a>`;
 
-  const otherAlerts = s.alerts.filter(a => !["before_salary", "plan_ending"].includes(a.type));
+  const featured = renew || ending;
+  const otherAlerts = s.alerts.filter(a => a.type !== "before_salary" && a !== featured);
   const personal = (s.budget.target || []).find(t => t.id === "personal");
   const cap = personal ? personal.amount : 0;
   const flex = Object.entries(s.categories.flexible || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
   const used = cap ? s.spent / cap : 0;
 
   $("#view").innerHTML = `
-    <section class="card ring-card">
-      <div class="ring">
-        <svg viewBox="0 0 224 224"><circle class="track" cx="112" cy="112" r="${R}" fill="none" stroke-width="18"/>
-          <circle class="fill ${avail < 0 ? "neg" : ""}" cx="112" cy="112" r="${R}" fill="none" stroke-width="18" stroke-linecap="round"
-            stroke-dasharray="${C}" stroke-dashoffset="${C}" data-target="${C * (1 - (avail < 0 ? 1 : pct))}"/></svg>
-        <div class="ring-center"><span class="k">${avail < 0 ? "تعدّيت بـ" : "باقي لك"}</span>
-          <span class="v num ${avail < 0 ? "neg" : ""}">${fmt(Math.abs(avail))}</span>
-          <span class="of">ر.س من <span class="num">${fmt(s.safe_to_spend)}</span></span></div>
-      </div>
-      <p class="ring-foot">صرفت ${money(s.spent)} من مصروفك لهالشهر</p>
-    </section>
+    <div class="slider" id="slider">${slide1}${slide2}${slide3}</div>
+    <div class="dots" id="dots">${["باقي لك", "التزاماتك هالشهر", "المعيشة"].map((l, i) => `<button aria-label="${l}" data-slide="${i}" aria-current="${i === 0}"></button>`).join("")}</div>
     <div class="grid-2">${card1}${card2}</div>
     ${otherAlerts.length ? `<section class="card tight">${alertsHtml(otherAlerts)}</section>` : ""}
     <section class="card">
@@ -472,14 +593,32 @@ async function renderHome() {
         : `<div class="empty">ما فيه مصروفات شخصية هالشهر للحين.</div>`}</div>
     </section>
     <a class="card tap" href="#obligations" style="display:block;text-decoration:none">
-      <div class="card-head"><h2>التزاماتك الشهرية</h2><span class="big">${money(s.obligations_total)}</span></div>
+      <div class="card-head"><h2>كيف نحسب «باقي لك»</h2></div>
       <div class="row"><span class="muted">الراتب</span><span class="r">${money(s.formula.salary)}</span></div>
-      <div class="row"><span class="muted">الالتزامات والإيجار</span><span class="r">− ${money(s.formula.obligations)}</span></div>
+      <div class="row"><span class="muted">الالتزامات والاشتراكات</span><span class="r">− ${money(s.formula.obligations)}</span></div>
       <div class="row"><span class="muted">المعيشة (متوسط آخر 3 شهور)</span><span class="r">− ${money(s.formula.essentials)}</span></div>
       <div class="row"><span class="muted">هامش الأمان</span><span class="r">− ${money(s.formula.buffer)}</span></div>
       <div class="row"><span class="t teal">تقدر تصرف هالشهر</span><span class="r teal">${money(s.safe_to_spend)}</span></div>
+      ${(s.banks || []).length > 1 ? `<p class="muted" style="margin:8px 0 0">من ${s.banks.length === 2 ? "بنكين" : `${s.banks.length} بنوك`} مربوطة.</p>` : ""}
     </a>`;
-  requestAnimationFrame(() => { const f = $(".ring .fill"); if (f) f.style.strokeDashoffset = f.dataset.target; });
+  animateRings();
+  bindSlider();
+}
+
+function bindSlider() {
+  const slider = $("#slider"), dots = $$("#dots button");
+  if (!slider) return;
+  const slides = $$(".slide", slider);
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(en => {
+      if (en.intersectionRatio > 0.6) {
+        const i = slides.indexOf(en.target);
+        dots.forEach((d, j) => d.setAttribute("aria-current", j === i));
+      }
+    });
+  }, { root: slider, threshold: [0.6] });
+  slides.forEach(s => io.observe(s));
+  dots.forEach((d, i) => d.addEventListener("click", () => slides[i].scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" })));
 }
 
 /* ===================== EXPENSES ===================== */
@@ -498,13 +637,16 @@ async function renderExpenses() {
   const [ex, s, w] = await Promise.all([api("/api/expenses"), api("/api/summary"), wishState()]);
   pageTop("المصروفات", w.count, w.ready);
   const start = cycleStart(s.today, s.salary.day);
-  const items = ex.items.filter(i => i.date >= start && i.date <= s.today && !["installment", "income"].includes(i.category));
+  const all = ex.items.filter(i => i.date >= start && i.date <= s.today && !["installment", "income", "subscription"].includes(i.category));
+  const sources = [...new Set(all.map(i => i.bank_name))];
+  const f = S.expFilter && sources.includes(S.expFilter) ? S.expFilter : "all";
+  const items = f === "all" ? all : all.filter(i => i.bank_name === f);
   const personal = (s.budget.target || []).find(t => t.id === "personal") || { amount: 0, pct: 20 };
   const used = personal.amount ? s.spent / personal.amount : 0;
   const warns = s.alerts.filter(a => a.type && a.type.startsWith("personal_budget"));
   const flex = Object.entries(s.categories.flexible || {}).sort((a, b) => b[1] - a[1]);
   $("#view").innerHTML = `
-    <p class="page-sub">من حسابك البنكي، وتقدر تضيف يدوي.</p>
+    <p class="page-sub">من ${(s.banks || []).length > 1 ? "كل حساباتك البنكية" : "حسابك البنكي"}، وتقدر تضيف يدوي.</p>
     <section class="card">
       <div class="muted">صرفك الشخصي هالشهر</div>
       <div class="huge" style="margin:4px 0 10px">${money(s.spent)}</div>
@@ -516,19 +658,23 @@ async function renderExpenses() {
     <section class="card">
       <h2>حسب الفئة</h2>
       ${flex.length ? flex.map(([k, v]) => `<div class="row"><span>${esc(k)}</span><span class="r">${money(v)}</span></div>`).join("") : `<div class="empty">ما فيه مصروفات شخصية هالشهر للحين.</div>`}
-      <p class="muted" style="margin:10px 0 0">المعيشة (بقالة، وقود، فواتير…) محسوبة ضمن «الالتزامات».</p>
+      <p class="muted" style="margin:10px 0 0">المعيشة (بقالة، وقود، فواتير…) والاشتراكات محسوبة ضمن «الالتزامات».</p>
     </section>
     <section class="card">
       <h2>عمليات هالشهر</h2>
-      <p class="muted" style="margin-top:-6px">اضغط على أي عملية من البنك عشان تغيّر تصنيفها، ونتذكره للمرات الجاية.</p>
+      ${sources.length > 1 ? `<div class="filters">${["all", ...sources].map(x => `<button data-exp-filter="${esc(x)}" aria-pressed="${f === x}">${x === "all" ? "الكل" : esc(x)}</button>`).join("")}</div>` : ""}
+      <p class="muted" style="margin-top:0">اضغط على أي عملية من البنك عشان تغيّر تصنيفها، ونتذكره للمرات الجاية.</p>
       ${items.length ? items.map(i => `<${i.deletable ? "div" : "button"} class="row" ${i.deletable ? "" : `data-recat="${esc(i.merchant)}"`}>
           <div class="l"><span class="ico ${i.category && i.category.startsWith("essential") ? "t" : ""}">${ic("wallet")}</span>
-          <div><div class="t">${esc(i.merchant)}</div><div class="s"><span class="num">${esc(i.date)}</span> · ${esc(catName(i.category))} · ${i.source === "manual" ? "يدوي" : "من البنك"}</div></div></div>
+          <div><div class="t">${esc(i.merchant)}</div>
+            <div class="s"><span class="num">${esc(i.date)}</span> · ${esc(catName(i.category))}</div>
+            <div class="bank-tag">${ic("bank", "icon")} ${esc(i.bank_name)}</div></div></div>
           <div style="display:flex;align-items:center;gap:6px"><span class="r">${money(i.amount)}</span>
           ${i.deletable ? `<button class="x-btn" data-del-exp="${esc(i.id)}" aria-label="حذف">${ic("trash")}</button>` : ""}</div>
         </${i.deletable ? "div" : "button"}>`).join("") : `<div class="empty">ما فيه مصروفات هالشهر للحين.</div>`}
     </section>`;
 }
+
 async function addExpenseSheet() {
   const groups = await categories();
   const flex = groups.find(g => g.id === "flexible").items;
@@ -569,7 +715,30 @@ async function renderObligations() {
   pageTop("الالتزامات", w.count, w.ready);
   const today = new Date(s.today + "T00:00:00");
   const daysTo = iso => Math.round((new Date(iso + "T00:00:00") - today) / 86400000);
-  const plans = o.active_items.filter(i => i.type !== "bill");
+  const plans = o.active_items.filter(i => i.type !== "bill" && i.kind !== "subscription");
+  const subs = o.active_items.filter(i => i.kind === "subscription");
+  const subsTotal = subs.reduce((a, x) => a + x.amount, 0);
+  const subCard = x => {
+    const d = daysTo(x.due_date);
+    const charged = x.status === "paid";
+    const renew = charged ? `انخصم هالشهر يوم ${x.day}، يتجدد الشهر الجاي` : `يتجدد ${whenDays(d)} (يوم ${x.day})`;
+    return `<article class="card ob sub-card">
+      <div class="top">
+        <div class="l" style="display:flex;gap:12px;align-items:center"><span class="ico a">${ic("clock")}</span>
+          <div><div class="t" style="font-weight:700">${esc(x.name)}</div><div class="muted renew">${renew}</div></div></div>
+        <div style="text-align:left"><div class="amount">${money(x.amount)}</div><div class="muted">شهرياً</div></div>
+      </div>
+      ${x.cancel_planned ? `<div class="alert warn">${ic("alert")}<div>ناوي تلغيه؟ ألغه من موقع الجهة ${charged ? "قبل التجديد الجاي" : `قبل ${whenDays(d) === "بكرة" ? "بكرة" : `يوم ${x.day}`}`} عشان ما ينخصم مرة ثانية.</div></div>` : ""}
+      <div class="foot">
+        <label class="switch"><input type="checkbox" data-remind="${esc(x.id)}" ${x.remind ? "checked" : ""}>ذكّرني قبل التجديد</label>
+        <div class="btn-row">${action(x.action)}</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn ${x.cancel_planned ? "ghost" : "soft"} sm" data-intent="${esc(x.id)}" data-on="${x.cancel_planned ? 0 : 1}">${x.cancel_planned ? "تراجعت، بخليه" : "ناوي ألغيه"}</button>
+        <button class="btn ghost sm" data-cancelled="${esc(x.id)}" data-name="${esc(x.name)}">ألغيته خلاص</button>
+      </div>
+    </article>`;
+  };
   const bills = o.active_items.filter(i => i.type === "bill");
   const statusBadge = i => i.status === "paid" ? `<span class="badge b-paid">${ic("check")}تسدّد هالشهر</span>`
     : i.status === "late" ? `<span class="badge b-late">${ic("alert")}متأخر</span>`
@@ -599,6 +768,9 @@ async function renderObligations() {
 
   const current = `
     ${plans.map(planCard).join("") || `<div class="card empty">ما فيه التزامات نشطة.</div>`}
+    ${subs.length ? `<div class="group-title">${ic("clock", "icon gold")} اشتراكاتك <span class="muted" style="font-weight:400">${money(subsTotal)} شهرياً</span></div>
+      <p class="muted" style="margin-top:-6px">نذكّرك قبل كل تجديد، عشان ما تتجدد اشتراكات ما تستخدمها.</p>
+      ${subs.map(subCard).join("")}` : ""}
     ${o.hidden_count ? `<section class="card lock">${ic("lock")}<p>${esc(o.locked_message)}</p><a class="btn soft" href="#subscriptions">الباقات</a></section>` : ""}
     <button class="btn ghost block" data-act="add-plan" style="margin-bottom:14px">${ic("plus")} أضف التزام فاته الربط</button>
     <section class="card">
@@ -613,8 +785,8 @@ async function renderObligations() {
 
   const previous = o.previous_payments.length ? o.previous_payments.map(p => `<article class="card ob">
       <div class="top"><div class="l" style="display:flex;gap:12px;align-items:center"><span class="ico t">${ic("check")}</span>
-        <div><div class="t" style="font-weight:700">${esc(p.name)}</div><div class="muted">${p.total ? `خلّصت ${counted(p.total)}` : "خلص"}</div></div></div>
-        <span class="badge b-paid">مكتمل</span></div>
+        <div><div class="t" style="font-weight:700">${esc(p.name)}</div><div class="muted">${p.status === "cancelled" ? `ألغيته${p.cancelled_at ? ` يوم ${esc(p.cancelled_at)}` : ""}، توفّر ${money(p.amount)} شهرياً` : p.total ? `خلّصت ${counted(p.total)}` : "خلص"}</div></div></div>
+        <span class="badge ${p.status === "cancelled" ? "b-grey" : "b-paid"}">${p.status === "cancelled" ? "ألغيته" : "مكتمل"}</span></div>
       ${p.total ? `<div class="muted">مجموع اللي دفعته: ${money(p.total * p.amount)}</div>` : ""}
     </article>`).join("") : `<div class="card empty">لما يخلص أي التزام بينتقل هنا تلقائياً.</div>`;
 
@@ -622,7 +794,8 @@ async function renderObligations() {
     <section class="card">
       <div class="muted">التزاماتك الشهرية</div>
       <div class="huge" style="margin:4px 0 8px">${money(o.total)}</div>
-      <div class="row"><span class="muted">الالتزامات والإيجار</span><span class="r">${money(o.plans_total)}</span></div>
+      <div class="row"><span class="muted">الالتزامات والإيجار</span><span class="r">${money(o.plans_total - subsTotal)}</span></div>
+      ${subsTotal ? `<div class="row"><span class="muted">الاشتراكات</span><span class="r">${money(subsTotal)}</span></div>` : ""}
       <div class="row"><span class="muted">المعيشة (متوسط آخر 3 شهور)</span><span class="r">${money(o.essentials_total)}</span></div>
     </section>
     <section class="card tight">
@@ -725,44 +898,72 @@ async function renderPlanner() {
   pageTop("المخطط", w.count, w.ready);
   const P = S.planner;
   $("#view").innerHTML = `
-    <p class="page-sub">قبل لا تشتري، شوف أنسب طريقة على وضعك الحقيقي.</p>
+    <p class="page-sub">قبل لا تشتري، نقارن لك التقسيط والتمويل والتحويش على وضعك الحقيقي، ونختار الأنسب.</p>
     <section class="card">
       <label class="field"><span>وش تبي تشتري؟</span><input id="pl-name" value="${esc(P.name)}" maxlength="60"></label>
       <div class="grid-2" style="margin:0">
         <label class="field" style="margin:0"><span>السعر (ر.س)</span><input id="pl-price" value="${esc(P.price)}" inputmode="decimal"></label>
         <label class="field" style="margin:0"><span>بكم شهر تبي تجمعه؟</span><input id="pl-months" value="${esc(P.months)}" inputmode="numeric" placeholder="اختياري"></label>
       </div>
+      <div class="btn-row" style="margin-top:10px">${[["شوز", 500], ["جوال", 3000], ["لابتوب", 7000], ["أثاث", 15000]].map(([n, p]) => `<button class="chip" data-quick="${p}" data-qname="${n}">${n} ${fmt(p)}</button>`).join("")}</div>
     </section>
     <div id="pl-out"><div class="skeleton"></div></div>
     <div id="pl-forecast"></div>`;
   let t;
   const update = () => { clearTimeout(t); t = setTimeout(() => plannerResults().catch(handleError), 300); };
   $("#pl-name").addEventListener("input", e => { P.name = e.target.value; });
-  $("#pl-price").addEventListener("input", e => { P.price = e.target.value; P.chosen = null; update(); });
+  $("#pl-price").addEventListener("input", e => { P.price = e.target.value; P.chosen = null; P.tenors = {}; update(); });
   $("#pl-months").addEventListener("input", e => { P.months = e.target.value; update(); });
   await plannerResults();
   plannerForecast().catch(() => {});
 }
 
-function offerCard(o, best, chosen) {
+function bnplCard(o, { best = false, chosen = false } = {}) {
   const fits = o.ok ? `<span class="badge b-paid">يناسبك الحين</span>`
     : o.earliest !== null ? `<span class="badge b-upcoming">يناسبك ${esc(o.earliest_label)}</span>` : `<span class="badge b-late">ما يناسب ميزانيتك</span>`;
   const tight = o.ok ? o.tight : o.start_tight;
-  return `<button class="offer ${best ? "best" : ""}" data-offer="${esc(o.id)}" aria-pressed="${chosen}">
-      <div class="top"><div><b>${esc(o.provider)}</b> <span class="muted">${esc(o.label)}</span></div>${best ? `<span class="badge b-paid">الأنسب لك</span>` : fits}</div>
+  return `<button class="offer ${best ? "best" : ""}" data-pick-type="bnpl" data-pick-id="${esc(o.id)}" aria-pressed="${chosen}">
+      <div class="top"><div><b>${esc(o.provider)}</b> <span class="muted">تقسيط · ${esc(o.label)}</span></div>${best ? `<span class="badge b-paid">الأنسب لك</span>` : fits}</div>
       ${best ? `<div class="muted">${esc(o.reason)}</div>` : ""}
       <dl class="kv">
         <dt>كم ينخصم كل شهر</dt><dd>${money(o.monthly)} × ${o.count}</dd>
-        <dt>التكلفة الكلية</dt><dd>${money(o.total)}${o.extra_cost > 0 ? ` <span class="muted">(+${fmt(o.extra_cost)})</span>` : ""}</dd>
+        <dt>اللي ترجعه كامل</dt><dd>${money(o.total)}${o.extra_cost > 0 ? ` <span class="muted">(+${fmt(o.extra_cost)} رسوم)</span>` : " <span class='muted'>(بدون رسوم)</span>"}</dd>
         ${tight !== null && tight !== undefined ? `<dt>في أضيق شهر</dt><dd>يبقى لك ${money(tight)}</dd>` : ""}
-        ${best ? `<dt>متى تبدأ</dt><dd>${o.ok ? "الحين" : esc(o.earliest_label)}</dd>` : ""}
+        <dt>متى تبدأ</dt><dd>${o.ok ? "الحين" : esc(o.earliest_label)}</dd>
       </dl>
     </button>`;
+}
+
+function loanCard(l, months, { best = false, chosen = false } = {}) {
+  const o = l.options.find(x => x.months === months) || l.options[0];
+  const status = !o.dbr_ok ? `<span class="badge b-late">نسبة الديون فوق ${fmt(33)}%</span>`
+    : o.earliest === null ? `<span class="badge b-late">ما يناسب ميزانيتك</span>`
+    : o.ok ? `<span class="badge b-paid">يناسبك الحين</span>` : `<span class="badge b-upcoming">يناسبك ${esc(o.earliest_label)}</span>`;
+  const tight = o.ok ? o.tight : o.start_tight;
+  return `<div class="offer ${best ? "best" : ""}" role="group" aria-pressed="${chosen}">
+      <div class="top"><div><b>${esc(l.name)}</b> <span class="muted">${l.type === "bank" ? "تمويل شخصي بنكي" : "شركة تمويل"}</span></div>${best ? `<span class="badge b-paid">الأنسب لك</span>` : status}</div>
+      ${best ? `<div class="muted">${esc(l.reason)}</div>` : ""}
+      <div class="tenors">${l.options.map(x => `<button data-tenor="${esc(l.id)}" data-months="${x.months}" aria-pressed="${x.months === o.months}"
+          class="${!x.dbr_ok || x.earliest === null ? "no" : ""}">${x.months} شهر</button>`).join("")}</div>
+      <dl class="kv">
+        <dt>القسط الشهري</dt><dd>${money(o.monthly)}</dd>
+        <dt>نسبة الربح (ثابتة سنوياً)</dt><dd>${o.flat_rate}%</dd>
+        <dt>الربح الكلي</dt><dd>${money(o.profit)}</dd>
+        <dt>الرسوم الإدارية</dt><dd>${money(o.fee)} <span class="muted">(1%، بحد أقصى 5,000)</span></dd>
+        <dt>اللي ترجعه كامل</dt><dd><b>${money(o.total_cost)}</b> <span class="muted">(+${fmt(o.extra_cost)})</span></dd>
+        <dt>التكلفة السنوية الفعلية</dt><dd>${o.apr}%</dd>
+        <dt>ديونك بعده</dt><dd class="${o.dbr_ok ? "" : "red"}">${o.dbr_after}% من راتبك</dd>
+        ${tight !== null && tight !== undefined ? `<dt>في أضيق شهر</dt><dd>يبقى لك ${money(tight)}</dd>` : ""}
+        <dt>متى تبدأ</dt><dd>${o.earliest === null ? "—" : o.ok ? "الحين" : esc(o.earliest_label)}</dd>
+      </dl>
+      <button class="btn ${chosen ? "" : "soft"} sm" data-pick-type="loan" data-pick-id="${esc(l.id)}" data-pick-months="${o.months}">${chosen ? "✓ اخترته" : "اختر هذا"}</button>
+    </div>`;
 }
 
 async function plannerResults() {
   const P = S.planner, out = $("#pl-out");
   if (!out) return;
+  P.tenors = P.tenors || {};
   const price = toNum(P.price), months = toNum(P.months);
   if (!price) { out.innerHTML = `<div class="card empty">اكتب السعر عشان نقارن.</div>`; return; }
   let r;
@@ -775,22 +976,46 @@ async function plannerResults() {
     }
     throw err;
   }
-  const best = r.offers.find(o => o.id === r.best_offer_id);
-  const chosenId = P.chosen && r.offers.some(o => o.id === P.chosen) ? P.chosen : best.id;
-  const chosenOffer = r.offers.find(o => o.id === chosenId) || best;
-  const others = r.offers.filter(o => o.id !== best.id);
+  S._offers = r;
+  const best = r.best;
+  // the user's pick (or the recommendation)
+  const chosen = P.chosen || (best ? { type: best.type, id: best.id, months: best.months } : null);
+  const isChosen = (type, id) => chosen && chosen.type === type && chosen.id === id;
+  const tenorOf = l => P.tenors[l.id] || (isChosen("loan", l.id) && chosen.months) || l.default_months;
+
+  let bestHtml = "";
+  if (best && best.type === "bnpl") bestHtml = bnplCard(r.offers.find(o => o.id === best.id), { best: true, chosen: isChosen("bnpl", best.id) });
+  if (best && best.type === "loan") { const l = r.loans.find(x => x.id === best.id); bestHtml = loanCard(l, P.tenors[l.id] || best.months, { best: true, chosen: isChosen("loan", l.id) }); }
+  if (!best) bestHtml = `<div class="alert warn">${ic("alert")}<div>ما فيه تقسيط أو تمويل يناسب ميزانيتك الحين. «تجمع أول» هو الخيار الآمن.</div></div>`;
+
+  const otherBnpl = r.offers.filter(o => !(best && best.type === "bnpl" && o.id === best.id));
+  const otherLoans = r.loans.filter(l => !(best && best.type === "loan" && l.id === best.id));
+  const notes = r.hidden.map(h => `<div class="note">${ic("alert", "icon")} ${esc(h.reason)}</div>`).join("");
+  const dbr = r.loans.length ? `<div class="note">ديونك الحالية ${money(r.dbr.debt_monthly)} شهرياً = <b>${r.dbr.current_pct}%</b> من راتبك. الحد المتبع في التمويل الاستهلاكي ${r.dbr.limit}%، يعني تقدر تضيف قسط لين ${money(r.dbr.room_monthly)} تقريباً.</div>` : "";
+  const total = otherBnpl.length + otherLoans.length;
+
+  const chosenLabel = (() => {
+    if (!chosen) return null;
+    if (chosen.type === "bnpl") { const o = r.offers.find(x => x.id === chosen.id); return o ? `${o.provider}، ${o.label.split("،")[0]}` : null; }
+    const l = r.loans.find(x => x.id === chosen.id); return l ? `${l.name}، ${tenorOf(l)} شهر` : null;
+  })();
+
   const sv = r.save;
   const steps = (sv.progress || []).slice(0, 8);
   const target = sv.target_months;
   out.innerHTML = `
-    <h2 style="font-size:16px;margin:4px 0 10px">العرض الأنسب لك</h2>
-    ${offerCard(best, true, chosenId === best.id)}
-    <button class="btn ghost block" data-act="others" style="margin-bottom:12px">${P.others ? "إخفاء العروض الثانية" : `عرض العروض الثانية (${others.length})`}</button>
-    ${P.others ? others.map(o => offerCard(o, false, chosenId === o.id)).join("") : ""}
-    <button class="btn block" data-act="wish-offer" style="margin-bottom:18px">${ic("heart")} أضف للأمنيات (${esc(chosenOffer.provider)}، ${esc(chosenOffer.label.split("،")[0])})</button>
+    <h2 style="font-size:16px;margin:4px 0 10px">الأنسب لك</h2>
+    ${bestHtml}
+    ${notes}
+    ${total ? `<button class="btn ghost block" data-act="others" style="margin-bottom:12px">${P.others ? "إخفاء الخيارات الثانية" : `قارن كل الخيارات (${total})`}</button>` : ""}
+    ${P.others ? `
+      ${otherBnpl.length ? `<div class="group-title">${ic("card", "icon violet")} التقسيط</div>${otherBnpl.map(o => bnplCard(o, { chosen: isChosen("bnpl", o.id) })).join("")}` : ""}
+      ${otherLoans.length ? `<div class="group-title">${ic("bank", "icon violet")} التمويل الشخصي (بنوك وشركات تمويل)</div>${dbr}
+        ${otherLoans.map(l => loanCard(l, tenorOf(l), { chosen: isChosen("loan", l.id) })).join("")}` : ""}` : (best && best.type === "loan" ? dbr : "")}
+    ${chosenLabel ? `<button class="btn block" data-act="wish-chosen" style="margin-bottom:18px">${ic("heart")} أضف للأمنيات (${esc(chosenLabel)})</button>` : ""}
 
     <section class="card">
-      <div class="card-head"><h2>تجمع أول</h2><span class="badge b-violet">الأقل مخاطرة</span></div>
+      <div class="card-head"><h2>تجمع أول</h2><span class="badge b-violet">بدون ديون</span></div>
       <dl class="kv">
         <dt>تحوّش هالشهر</dt><dd>${money(sv.monthly)} <span class="muted">(${fmt(sv.salary_pct)}% من راتبك)</span></dd>
         <dt>بعدها كل شهر</dt><dd>لين ${money(sv.max_monthly)} <span class="muted">(حد الادخار)</span></dd>
@@ -806,9 +1031,10 @@ async function plannerResults() {
       ${steps.length ? `<div class="steps">${steps.map(p => `<div class="st"><span>${esc(p.label)}: تحوّش ${money(p.amount)}</span><span class="num">${p.pct}%</span></div>`).join("")}</div>` : ""}
       <button class="btn soft block" data-act="wish-save" style="margin-top:14px">${ic("heart")} أضف للأمنيات بطريقة «تجمع أول»</button>
     </section>
-    <p class="muted" style="text-align:center">عروض تجريبية للتوضيح. العروض الحقيقية تجي من الجهات بعد الشراكة.<br>هذي معلومات، مو استشارة مالية.</p>`;
-  out.dataset.chosen = chosenId;
-  out.dataset.methods = JSON.stringify(Object.fromEntries(r.offers.map(o => [o.id, o.method])));
+    <p class="muted" style="text-align:center">أرقام الجهات تجريبية للتوضيح، والحسابات حقيقية على بياناتك. العروض الفعلية تجي من الجهات بعد الشراكة.<br>هذي معلومات، مو استشارة مالية.</p>`;
+  P._chosenMethod = !chosen ? null : chosen.type === "bnpl"
+    ? (r.offers.find(o => o.id === chosen.id) || {}).method
+    : `loan:${chosen.id}:${(() => { const l = r.loans.find(x => x.id === chosen.id); return l ? tenorOf(l) : chosen.months; })()}`;
 }
 
 async function plannerForecast() {
@@ -833,9 +1059,11 @@ async function plannerForecast() {
 async function addWishFromPlanner(method) {
   const P = S.planner, price = toNum(P.price), name = (P.name || "").trim() || "منتج";
   if (!price) return toast("اكتب السعر أول.", "bad");
+  if (!method) return toast("اختر طريقة أول.", "bad");
   try {
-    await api("/api/wishlist", { method: "POST", body: { name, price, method } });
-    toast(`انضاف ${esc(name)} للأمنيات (${METHOD[method] || method}). بنذكّرك أول ما يصير مناسب.`, "good");
+    const r = await api("/api/wishlist", { method: "POST", body: { name, price, method } });
+    const item = r.items.find(i => i.name === name);
+    toast(`انضاف ${esc(name)} للأمنيات (${esc(item ? item.method_label : method)}). بنذكّرك أول ما يصير مناسب.`, "good");
     location.hash = "#wishlist";
   } catch (err) { handleError(err); }
 }
@@ -853,7 +1081,7 @@ async function renderWishlist() {
         : st.ok ? "مناسب لك الحين" : st.whenK === null ? "ما يناسب بهالطريقة، جرّب «تجمع أول»" : `يصير مناسب ${esc(i.when_label)}`;
       return `<article class="card ob">
         <div class="top"><div class="l" style="display:flex;gap:12px;align-items:center"><span class="ico">${ic("heart")}</span>
-          <div><div class="t" style="font-weight:700">${esc(i.name)}</div><div class="muted">${METHOD[i.method] || esc(i.method)}</div></div></div>
+          <div><div class="t" style="font-weight:700">${esc(i.name)}</div><div class="muted">${esc(i.method_label || METHOD[i.method] || i.method)}</div></div></div>
           <button class="x-btn" data-del-wish="${i.id}" aria-label="حذف">${ic("trash")}</button></div>
         <div class="top" style="align-items:center"><span class="badge ${st.ok ? "b-paid" : "b-upcoming"}">${ic(st.ok ? "check" : "clock")}${line}</span>
           <span class="amount">${money(i.price)}</span></div>
@@ -892,19 +1120,25 @@ function donut(parts) {
 const BUDGET_COLORS = { essentials: "var(--violet-2)", personal: "var(--teal)", savings: "var(--amber)", remaining: "var(--track)" };
 
 async function renderAccount() {
-  const [a, b, w] = await Promise.all([api("/api/account"), api("/api/budget"), wishState()]);
+  const [a, b, w, bk] = await Promise.all([api("/api/account"), api("/api/budget"), wishState(), api("/api/banks")]);
+  S._banks = bk;
   pageTop("حسابي", w.count, w.ready);
   const theme = document.documentElement.dataset.theme || "dark";
   const targets = Object.fromEntries((b.target || []).map(t => [t.id, t]));
   const contact = a.contact || {};
   $("#view").innerHTML = `
     <section class="card">
-      <div class="who" style="margin-bottom:12px"><span class="avatar" style="width:52px;height:52px;font-size:22px;border-radius:16px">${esc((a.display_name || "م").charAt(0))}</span>
+      <div class="who" style="margin-bottom:12px"><span class="avatar" style="width:52px;height:52px;font-size:22px;border-radius:16px">${esc(T(a.display_name || "م").charAt(0))}</span>
         <div><b style="font-size:18px">${esc(a.display_name || "")}</b><small dir="ltr" style="display:block;text-align:right">${esc(a.phone_masked || "")}</small></div></div>
       ${a.email ? `<div class="row"><span class="muted">الإيميل</span><span dir="ltr">${esc(a.email)}</span></div>` : ""}
-      <div class="row"><span class="muted">البنك المربوط</span><span>${esc(a.bank_name || "—")}</span></div>
-      <div class="row"><span class="muted">تنتهي الموافقة</span><span class="num">${esc((a.consent_expires_at || "").slice(0, 10) || "—")}</span></div>
       <div class="row"><span class="muted">يوم الراتب</span><span>${a.salary_day} من كل شهر</span></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>حساباتك البنكية</h2>${S.demo ? `<button class="link-btn" data-act="add-bank">${ic("plus", "icon")} اربط بنك</button>` : ""}</div>
+      ${bk.banks.map(x => `<div class="row"><div class="l"><span class="ico">${ic("bank")}</span><div><div class="t">${esc(x.name)}</div>
+        <div class="s">${fmt(x.transactions)} عملية · الموافقة لين <span class="num">${esc((x.expires_at || "").slice(0, 10))}</span></div></div></div>
+        <button class="btn ghost sm" data-del-bank="${esc(x.bank_id)}" data-name="${esc(x.name)}">فصل</button></div>`).join("")}
     </section>
 
     <a class="card tap" href="#subscriptions" style="display:flex;justify-content:space-between;align-items:center;text-decoration:none">
@@ -915,8 +1149,9 @@ async function renderAccount() {
     <section class="card">
       <div class="card-head"><h2>توزيع راتبك</h2><button class="link-btn" data-act="edit-budget">عدّل الأهداف</button></div>
       <div class="donut-wrap">${donut(b.actual.map(x => ({ value: x.amount, color: BUDGET_COLORS[x.id] })))}
-        <div class="legend">${b.actual.map(x => `<div class="li"><span><i style="background:${BUDGET_COLORS[x.id]}"></i>${esc(x.label)}</span>
-          <span style="white-space:nowrap"><b class="num">${x.pct}%</b>${targets[x.id] ? ` <span class="muted">هدفك ${targets[x.id].pct}%</span>` : ""}</span></div>`).join("")}</div></div>
+        <div class="legend">${b.actual.map(x => `<div class="li" style="flex-direction:column;align-items:flex-start;gap:0">
+          <span><i style="background:${BUDGET_COLORS[x.id]}"></i>${esc(x.label)} <b class="num">${x.pct}%</b></span>
+          ${targets[x.id] ? `<span class="muted" style="font-size:12px;padding-inline-start:18px">هدفك ${targets[x.id].pct}%</span>` : ""}</div>`).join("")}</div></div>
       <p class="muted" style="margin:10px 0 0">الرقم الأول اللي صار فعلاً هالشهر، والثاني هدفك.</p>
       ${b.warnings.length ? `<div style="margin-top:12px">${alertsHtml(b.warnings)}</div>` : ""}
     </section>
@@ -927,12 +1162,20 @@ async function renderAccount() {
     </section>
 
     <section class="card">
+      <h2>اللغة · Language</h2>
+      <div class="seg" style="grid-template-columns:1fr 1fr" data-no-tr>
+        <button data-lang-set="ar" aria-pressed="${!window.I18N || I18N.lang === "ar"}">العربية</button>
+        <button data-lang-set="en" aria-pressed="${!!window.I18N && I18N.lang === "en"}">English</button>
+      </div>
+    </section>
+
+    <section class="card">
       <h2>تواصل معنا</h2>
       ${contact.email || contact.whatsapp ? `<div class="btn-row" style="margin-bottom:12px">
         ${contact.email ? `<a class="chip" href="mailto:${esc(contact.email)}">${ic("ext")}الإيميل</a>` : ""}
         ${contact.whatsapp ? `<a class="chip" href="https://wa.me/${esc(String(contact.whatsapp).replace(/\D/g, ""))}" target="_blank" rel="noopener">${ic("ext")}واتساب</a>` : ""}</div>` : ""}
       <form id="f-contact">
-        <label class="field"><span>اسمك</span><input name="name" required maxlength="60" value="${esc(a.display_name || "")}"></label>
+        <label class="field"><span>اسمك</span><input name="name" required maxlength="60" value="${esc(T(a.display_name || ""))}"></label>
         <label class="field"><span>رسالتك</span><textarea name="message" required minlength="5" maxlength="2000"></textarea></label>
         <button class="btn block" type="submit">أرسل</button>
       </form>
@@ -1014,6 +1257,27 @@ async function renderSubscriptions() {
       <p class="muted" style="margin:8px 0 0">بدون دفع، عشان تشوف الفرق بين الباقات.</p></section>` : ""}`;
 }
 
+async function addBankSheet() {
+  const data = S._banks || await api("/api/banks");
+  const have = new Set(data.banks.map(b => b.bank_id));
+  const options = data.available.filter(b => !have.has(b.bank_id));
+  const sheet = openSheet({ title: "اربط بنك ثاني", body: options.length
+    ? `<p class="muted" style="margin-top:0">نقرأ عملياته بنفس الموافقة (قراءة فقط)، ونضيف التزاماته واشتراكاته لصورتك الكاملة.</p>
+       ${options.map(b => `<button class="bank" data-add-bank="${esc(b.bank_id)}"><span class="ico">${ic("bank")}</span>${esc(b.name)}</button>`).join("")}`
+    : `<div class="empty">ربطت كل البنوك المتاحة بالديمو.</div>` });
+  sheet.addEventListener("click", async e => {
+    const b = e.target.closest("[data-add-bank]"); if (!b) return;
+    b.disabled = true; b.insertAdjacentHTML("beforeend", `<span class="muted" style="margin-inline-start:auto">نربط…</span>`);
+    try {
+      const r = await api("/api/banks", { method: "POST", body: { bank_id: b.dataset.addBank } });
+      closeSheet();
+      const subs = r.plans.filter(p => p.kind === "subscription").length;
+      toast(`<b>ربطنا ${esc(r.bank_name)}.</b> ${r.plans.length ? `لقينا ${subs ? `${subs === 1 ? "اشتراك واحد" : subs === 2 ? "اشتراكين" : `${subs} اشتراكات`}` : `${r.plans.length} التزامات`} جديدة.` : "ما لقينا التزامات جديدة."}`, "good", 6000);
+      refresh();
+    } catch (err) { b.disabled = false; handleError(err); }
+  });
+}
+
 /* ===================== CHAT ===================== */
 const SUGGESTIONS = ["أقدر آخذ جوال بـ 3000 على 4 دفعات؟", "طيب متى أقدر؟", "حط الجوال بالأمنيات", "كم عليّ هالشهر؟", "ضيف مصروف قهوة 20"];
 function chatHtml() {
@@ -1041,7 +1305,7 @@ function openChat() {
   async function send(text) {
     S.chat.push({ role: "user", text }); S.chat.push({ role: "bot", text: "لحظة، أحسب…", pending: true }); paint();
     try {
-      const r = await api("/api/chat", { method: "POST", body: { message: text } });
+      const r = await api("/api/chat", { method: "POST", body: { message: text, lang: window.I18N ? I18N.lang : "ar" } });
       S.chat.pop(); S.chat.push({ role: "bot", text: r.reply, tools: r.tools });
       (r.actions || []).forEach(a => S.chat.push({ type: "action", action: { ...a, state: "pending" } }));
     } catch (err) {
@@ -1090,24 +1354,66 @@ document.addEventListener("click", async e => {
   if (act === "upgrade") return toast("قريباً.");
   if (act === "others") { S.planner.others = !S.planner.others; return plannerResults().catch(handleError); }
   if (act === "wish-save") return addWishFromPlanner("save");
-  if (act === "wish-offer") {
-    const out = $("#pl-out"); const methods = JSON.parse(out.dataset.methods || "{}");
-    return addWishFromPlanner(methods[out.dataset.chosen] || "bnpl4");
-  }
+  if (act === "wish-chosen") return addWishFromPlanner(S.planner._chosenMethod);
+  if (act === "add-bank") return addBankSheet();
   if (act === "reset") {
-    if (!confirm("بنبدأ الديمو من جديد ونمسح البيانات الحالية. تبي نكمل؟")) return;
+    if (!ask("بنبدأ الديمو من جديد ونمسح البيانات الحالية. تبي نكمل؟")) return;
     try { const r = await api("/api/demo/reset", { method: "POST" }); setToken(r.token); S.chat = []; showDetected(); } catch (err) { handleError(err); }
     return;
   }
   if (act === "revoke") {
-    if (!confirm("متأكد؟ بنلغي الموافقة ونحذف عملياتك والتزاماتك.")) return;
+    if (!ask("متأكد؟ بنلغي الموافقة ونحذف عملياتك والتزاماتك.")) return;
     try { await api("/api/consent", { method: "DELETE" }); toast("ألغينا الموافقة وحذفنا بياناتك.", "good"); S.chat = []; showBankConnect(); }
     catch (err) { handleError(err); }
     return;
   }
 
-  const offer = t.closest("[data-offer]");
-  if (offer) { S.planner.chosen = offer.dataset.offer; return plannerResults().catch(handleError); }
+  const pick = t.closest("[data-pick-type]");
+  if (pick) {
+    const months = pick.dataset.pickMonths ? Number(pick.dataset.pickMonths) : null;
+    S.planner.chosen = { type: pick.dataset.pickType, id: pick.dataset.pickId, months };
+    return plannerResults().catch(handleError);
+  }
+  const tenor = t.closest("[data-tenor]");
+  if (tenor) {
+    const id = tenor.dataset.tenor, months = Number(tenor.dataset.months);
+    S.planner.tenors = { ...(S.planner.tenors || {}), [id]: months };
+    if (S.planner.chosen && S.planner.chosen.type === "loan" && S.planner.chosen.id === id) S.planner.chosen.months = months;
+    return plannerResults().catch(handleError);
+  }
+  const quick = t.closest("[data-quick]");
+  if (quick) {
+    S.planner = { ...S.planner, price: quick.dataset.quick, name: T(quick.dataset.qname), chosen: null, tenors: {} };
+    $("#pl-price").value = S.planner.price; $("#pl-name").value = S.planner.name;
+    return plannerResults().catch(handleError);
+  }
+  const expF = t.closest("[data-exp-filter]");
+  if (expF) { S.expFilter = expF.dataset.expFilter; return refresh(); }
+  const intent = t.closest("[data-intent]");
+  if (intent) {
+    const on = intent.dataset.on === "1";
+    try { await api(`/api/plans/${encodeURIComponent(intent.dataset.intent)}`, { method: "PATCH", body: { cancel_planned: on, remind: true } });
+      toast(on ? "تمام، بنذكّرك قبل التجديد عشان تلغيه." : "تمام، خليناه.", "good"); refresh(); }
+    catch (err) { handleError(err); }
+    return;
+  }
+  const canc = t.closest("[data-cancelled]");
+  if (canc) {
+    if (!ask(`ألغيت ${canc.dataset.name} من موقع الجهة؟ بنشيله من التزاماتك.`)) return;
+    try { const r = await api(`/api/plans/${encodeURIComponent(canc.dataset.cancelled)}/cancelled`, { method: "POST" });
+      toast(`<b>حلو!</b> وفّرت ${money(r.saves)} شهرياً.${r.charged_this_month ? " انخصم هالشهر، ومن الشهر الجاي ما عاد ينخصم." : ""}`, "good", 6000); refresh(); }
+    catch (err) { handleError(err); }
+    return;
+  }
+  const delB = t.closest("[data-del-bank]");
+  if (delB) {
+    if (!ask(`نفصل ${delB.dataset.name} ونحذف عملياته من مُدار؟`)) return;
+    try { const r = await api(`/api/banks/${encodeURIComponent(delB.dataset.delBank)}`, { method: "DELETE" });
+      if (r.last_bank) { toast("فصلنا آخر بنك وحذفنا بياناتك.", "good"); S.chat = []; showBankConnect(); return; }
+      toast(`فصلنا ${esc(delB.dataset.name)}.`, "good"); refresh(); }
+    catch (err) { handleError(err); }
+    return;
+  }
   const setM = t.closest("[data-set-months]");
   if (setM) { S.planner.months = setM.dataset.setMonths; $("#pl-months").value = S.planner.months; return plannerResults().catch(handleError); }
   const setP = t.closest("[data-set-price]");
@@ -1125,8 +1431,16 @@ document.addEventListener("click", async e => {
   const conf = t.closest("[data-confirm]");
   if (conf) { try { await api(`/api/plans/${encodeURIComponent(conf.dataset.confirm)}/confirm`, { method: "POST", body: {} }); toast("أكدنا الالتزام.", "good"); refresh(); } catch (err) { handleError(err); } return; }
   const delP = t.closest("[data-del-plan]");
-  if (delP) { if (!confirm("نحذف هالالتزام من مُدار؟ هذا ما يلغيه عند الجهة.")) return;
+  if (delP) { if (!ask("نحذف هالالتزام من مُدار؟ هذا ما يلغيه عند الجهة.")) return;
     try { await api(`/api/plans/${encodeURIComponent(delP.dataset.delPlan)}`, { method: "DELETE" }); refresh(); } catch (err) { handleError(err); } return; }
+  const lg = t.closest("[data-lang-set]");
+  if (lg) {
+    if (lg.dataset.langSet === I18N.lang) return;
+    I18N.set(lg.dataset.langSet);
+    try { sessionStorage.setItem("mudar_skip_splash", "1"); } catch (_) {}
+    location.reload();
+    return;
+  }
   const th = t.closest("[data-theme-set]");
   if (th) { applyTheme(th.dataset.themeSet); $$("[data-theme-set]").forEach(b => b.setAttribute("aria-pressed", b === th)); return; }
   const sw = t.closest("[data-plan-switch]");
@@ -1134,6 +1448,13 @@ document.addEventListener("click", async e => {
 });
 
 document.addEventListener("change", async e => {
+  const rm = e.target.closest("[data-remind]");
+  if (rm && !e.target.closest(".sheet-bg")) {
+    try { await api(`/api/plans/${encodeURIComponent(rm.dataset.remind)}`, { method: "PATCH", body: { remind: rm.checked } });
+      toast(rm.checked ? "بنذكّرك قبل التجديد." : "وقفنا التذكير لهالاشتراك.", "good"); }
+    catch (err) { rm.checked = !rm.checked; handleError(err); }
+    return;
+  }
   const m = e.target.closest("[data-mode]");
   if (!m || e.target.closest(".sheet-bg")) return;
   try {
@@ -1145,7 +1466,13 @@ document.addEventListener("change", async e => {
 
 /* ===================== boot ===================== */
 applyTheme();
+if (window.I18N) I18N.start();
 if (S.token) startApp(); else showWelcome();
+(() => {
+  let skip = false;
+  try { skip = sessionStorage.getItem("mudar_skip_splash") === "1"; sessionStorage.removeItem("mudar_skip_splash"); } catch (_) {}
+  if (!skip) splash();
+})();
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("/static/sw.js").catch(() => {}));
 }

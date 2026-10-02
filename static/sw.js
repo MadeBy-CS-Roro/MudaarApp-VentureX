@@ -1,8 +1,10 @@
-const CACHE_NAME = "mawid-static-shell-v3";
+const CACHE_NAME = "mawid-static-shell-v5";
 const STATIC_FILES = [
   "/static/index.html",
   "/static/app.css",
   "/static/app.js",
+  "/static/i18n.js",
+  "/static/logo.png",
   "/static/manifest.json",
   "/static/icon-192.png",
   "/static/icon-512.png"

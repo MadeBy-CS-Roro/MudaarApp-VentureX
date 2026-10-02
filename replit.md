@@ -40,8 +40,8 @@ Consent creation and `/api/demo/reset` reset the demo data. No live bank connect
 
 The user approved replacing the full app with the uploaded Mudar frontend and backend, including its login and simulated payment flows. Preserve saved data, security, production safeguards, backups, and financial calculation rules when making further changes.
 Manual flexible expense entry, dated history, and manual-only deletion use `/api/expenses`; bank-derived transactions remain read-only in that history.
-All screens are Arabic RTL, purple/teal, phone-first (390px); desktop keeps a centered frame no wider than 430px. Preserve provider demo data and the safe-to-spend formula. Only the session token and per-device appearance choice (`mudar_theme`) may be stored in localStorage. Budget targets and subscription are server-owned per-user data. Assistant writes require explicit, expiring, one-time confirmation.
-Use consistent casual Saudi Arabic, address the user in masculine singular, and greet with "هلا نورة". Use هالشهر، الشهر الجاي، الحين، شهور، ر.س. Shared number agreement comes from the language API.
+Screens are phone-first (390px), with Arabic RTL and English LTR; desktop keeps a centered frame no wider than 430px. Preserve the uploaded styling, provider demo data and safe-to-spend formula. The session token, per-device appearance and language choices may be stored in localStorage. Budget targets and subscription are server-owned per-user data. Assistant writes require explicit, expiring, one-time confirmation.
+For Arabic copy, use consistent casual Saudi Arabic, address the user in masculine singular, and greet with "هلا نورة". Use هالشهر، الشهر الجاي، الحين، شهور، ر.س. English mode uses the corresponding English labels. Shared number agreement comes from the language API.
 The assistant includes five questions per salary cycle; confirmation/cancellation does not count as another question. Demo reset clears usage. No paid checkout is implemented. Demo Noura starts Plus and can switch tiers without payment; production cannot call the demo switch.
 Budget targets default 70/20/10 and must total 100. Actual essentials combine plans and usual essentials; remaining includes the safety buffer. Savings deadlines count this month's deposit as period one, unlike elapsed `buyK`: 3000 at 10% requires five deposits, four future months; three deposits reach 1920. The user's savings target drives the shared saving rule.
 Subscriptions limit active obligations to Basic5 / Plus30 / Premiumunlimited without changing totals. Basic has no smart-account or planner access; Plus adds both; only Premium gets a 12-month financial forecast. Completed plans appear in previous payments rather than active obligations.
@@ -57,3 +57,10 @@ Contact form submissions are stored locally and rate limited. Public email/Whats
 - Pay all: `GET /api/payments/due`, `POST /api/payments/pay` (demo only, simulated bank approval), `PATCH /api/plans/{id}` `{pay_mode}`.
 - Fixed categories: `GET /api/categories`.
 - Tests set `MUDAR_ALLOW_ANON=1` in tests/conftest.py so old tests can call without a token. Never set it on the live app.
+
+## Latest uploaded app
+- The user approved a full replacement with the newer complete ZIP. Do not reintroduce selective-import restrictions from older archive documentation.
+- Language switching uses `static/i18n.js`; preserve English LTR and Arabic RTL, including assistant replies and reload persistence.
+- `/api/banks` lists and adds demo bank connections; deleting one bank leaves the other banks and manual entries intact. Existing single-bank transaction history is tagged during migration, without resetting saved records.
+- Subscription controls use `remind`, `cancel_planned`, and `/api/plans/{id}/cancelled`; only confirmed cancellation changes future commitments.
+- `loans.py` provides sample lender comparisons, fees, APR and debt-burden checks. The rates and offers are demo data, not verified real lender offers.

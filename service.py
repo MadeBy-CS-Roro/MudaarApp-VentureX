@@ -22,7 +22,7 @@ DEFAULT_BUFFER = 500.0
 
 # ---------- loading ----------
 def _txs(con, user_id: int, until: date | None = None) -> list[dict]:
-    q = "SELECT date, amount, direction, merchant, description, category FROM transactions WHERE user_id=? AND source='bank'"
+    q = "SELECT date, amount, direction, merchant, description, category, bank_id FROM transactions WHERE user_id=? AND source='bank'"
     args = [user_id]
     if until:
         q += " AND date<=?"
@@ -97,43 +97,104 @@ def _ess_breakdown(txs, salary_day, cur, ov) -> dict:
 
 
 # ---------- onboarding ----------
-def connect_bank(con, user_hash: str, bank_id: str) -> dict:
-    con.execute("INSERT OR IGNORE INTO users(user_hash, display_name) VALUES (?, ?)", (user_hash, "نورة"))
-    user_id = con.execute("SELECT id FROM users WHERE user_hash=?", (user_hash,)).fetchone()["id"]
-    # fresh start for the demo
-    for table in ("savings_deposits", "plan_settlements", "user_preferences", "transactions", "manual_expenses", "plans", "wishlist", "demo_state", "category_overrides", "pending_actions", "chat_usage"):
-        con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
-    con.execute("UPDATE consents SET status='revoked' WHERE user_id=?", (user_id,))
+def _insert_bank_txs(con, user_id: int, bank_id: str, txs: list[dict]) -> None:
+    for x in txs:
+        con.execute("INSERT INTO transactions(user_id,date,amount,direction,merchant,description,category,bank_id) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (user_id, x["date"].isoformat(), x["amount"], x["direction"], x["merchant"], x["description"],
+                     detect.categorize(x["merchant"], x["description"], overrides(con, user_id)), bank_id))
 
+
+def _detect_new_plans(con, user_id: int) -> list[dict]:
+    """Run detection over ALL connected accounts and store plans we don't have yet."""
+    txs = _txs(con, user_id)
+    sal = detect.detect_salary(txs) or {"day": 27}
+    found = []
+    for p in detect.detect_plans(txs, sal["day"]):
+        added = con.execute(
+            "INSERT OR IGNORE INTO plans(id,user_id,name,merchant,kind,amount,day,active_until,total_count,confirmed,action) "
+            "VALUES (?,?,?,?,?,?,?,?,?,0,?)",
+            (p["id"], user_id, p["name"], p["merchant"], p["kind"], p["amount"], p["day"],
+             p["active_until"], p["total_count"], json.dumps(p["action"], ensure_ascii=False))).rowcount
+        if added:
+            found.append(p)
+    return found
+
+
+def _new_consent(con, user_id: int, bank_id: str) -> tuple[str, str]:
     consent_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
+    expires = (now + timedelta(days=90)).isoformat()
     con.execute("INSERT INTO consents VALUES (?,?,?,?,?,?,?)",
-                (consent_id, user_id, bank_id, json.dumps(provider.SCOPES), "active",
-                 now.isoformat(), (now + timedelta(days=90)).isoformat()))
+                (consent_id, user_id, bank_id, json.dumps(provider.SCOPES), "active", now.isoformat(), expires))
+    return consent_id, expires
 
+
+def connect_bank(con, user_hash: str, bank_id: str) -> dict:
+    """First connection (or demo reset): fresh start with this one bank."""
+    con.execute("INSERT OR IGNORE INTO users(user_hash, display_name) VALUES (?, ?)", (user_hash, "نورة"))
+    user_id = con.execute("SELECT id FROM users WHERE user_hash=?", (user_hash,)).fetchone()["id"]
+    for table in ("savings_deposits", "plan_settlements", "user_preferences", "transactions", "manual_expenses", "plans", "wishlist", "demo_state", "category_overrides", "pending_actions", "chat_usage", "cycle_payments"):
+        con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+    con.execute("UPDATE consents SET status='revoked' WHERE user_id=?", (user_id,))
+    consent_id, expires = _new_consent(con, user_id, bank_id)
     txs = provider.fetch_transactions(bank_id)
-    for x in txs:
-        con.execute("INSERT INTO transactions(user_id,date,amount,direction,merchant,description,category) VALUES (?,?,?,?,?,?,?)",
-                    (user_id, x["date"].isoformat(), x["amount"], x["direction"], x["merchant"], x["description"],
-                     detect.categorize(x["merchant"], x["description"])))
+    _insert_bank_txs(con, user_id, bank_id, txs)
     con.execute("INSERT INTO demo_state VALUES (?,?)", (user_id, provider.DEMO_TODAY.isoformat()))
     con.execute("INSERT INTO user_preferences(user_id,plan) VALUES (?,'plus')", (user_id,))
-
-    sal = detect.detect_salary(txs)
-    found = detect.detect_plans(txs, sal["day"])
-    for p in found:
-        con.execute("INSERT INTO plans(id,user_id,name,merchant,kind,amount,day,active_until,total_count,confirmed,action) VALUES (?,?,?,?,?,?,?,?,?,0,?)",
-                    (p["id"], user_id, p["name"], p["merchant"], p["kind"], p["amount"], p["day"],
-                     p["active_until"], p["total_count"], json.dumps(p["action"], ensure_ascii=False)))
+    found = _detect_new_plans(con, user_id)
     con.execute("INSERT INTO wishlist(user_id,name,price,method,saved) VALUES (?,?,?,?,?)", (user_id, "عمرة", 3800, "save", 1140))
     unknown = sorted({x["merchant"] for x in txs if detect.categorize(x["merchant"], x["description"]) is None})
     return {"user_id": user_id, "consent_id": consent_id, "plans": found, "unknown_merchants": unknown,
-            "expires_at": (now + timedelta(days=90)).isoformat()}
+            "expires_at": expires}
+
+
+def add_bank(con, user_id: int, bank_id: str) -> dict:
+    """Connect another bank. Its transactions are tagged with the bank, and detection runs over all banks."""
+    if con.execute("SELECT 1 FROM consents WHERE user_id=? AND bank_id=? AND status='active'",
+                   (user_id, bank_id)).fetchone():
+        raise HTTPException(409, "هالبنك مربوط من قبل.")
+    consent_id, expires = _new_consent(con, user_id, bank_id)
+    _insert_bank_txs(con, user_id, bank_id, provider.fetch_transactions(bank_id))
+    found = _detect_new_plans(con, user_id)
+    return {"consent_id": consent_id, "expires_at": expires, "plans": found, "bank_name": provider.bank_name(bank_id)}
+
+
+def remove_bank(con, user_id: int, bank_id: str) -> dict:
+    active = [r["bank_id"] for r in con.execute(
+        "SELECT bank_id FROM consents WHERE user_id=? AND status='active'", (user_id,))]
+    if bank_id not in active:
+        raise HTTPException(404, "هالبنك مو مربوط.")
+    if len(active) == 1:
+        revoke(con, user_id)
+        return {"ok": True, "last_bank": True}
+    con.execute("UPDATE consents SET status='revoked' WHERE user_id=? AND bank_id=?", (user_id, bank_id))
+    con.execute("DELETE FROM transactions WHERE user_id=? AND bank_id=?", (user_id, bank_id))
+    # Bank-detected plans that no longer have any transactions go away; manual ones stay.
+    for p in con.execute("SELECT id, merchant FROM plans WHERE user_id=?", (user_id,)).fetchall():
+        if p["merchant"].startswith("MANUAL:"):
+            continue
+        if not con.execute("SELECT 1 FROM transactions WHERE user_id=? AND UPPER(merchant)=?",
+                           (user_id, p["merchant"])).fetchone():
+            con.execute("DELETE FROM plans WHERE user_id=? AND id=?", (user_id, p["id"]))
+    return {"ok": True, "last_bank": False}
+
+
+def banks(con, user_id: int) -> list[dict]:
+    rows = con.execute("SELECT bank_id, expires_at FROM consents WHERE user_id=? AND status='active' ORDER BY created_at",
+                       (user_id,)).fetchall()
+    out = []
+    for r in rows:
+        count = con.execute("SELECT COUNT(*) FROM transactions WHERE user_id=? AND bank_id=?",
+                            (user_id, r["bank_id"])).fetchone()[0]
+        out.append({"bank_id": r["bank_id"], "name": provider.bank_name(r["bank_id"]),
+                    "expires_at": r["expires_at"], "transactions": count})
+    return out
 
 
 def revoke(con, user_id: int):
     con.execute("UPDATE consents SET status='revoked' WHERE user_id=?", (user_id,))
-    for table in ("savings_deposits", "plan_settlements", "user_preferences", "transactions", "manual_expenses", "plans", "demo_state", "wishlist", "category_overrides", "pending_actions", "chat_usage"):
+    for table in ("savings_deposits", "plan_settlements", "user_preferences", "transactions", "manual_expenses", "plans", "demo_state", "wishlist", "category_overrides", "pending_actions", "chat_usage", "cycle_payments"):
         con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
 
 
@@ -147,6 +208,8 @@ def plans_view(con, user_id: int) -> list[dict]:
                     "total": p["total_count"], "remaining": 0 if p["id"] in settled else plan.remaining_from(s.current),
                     "confirmed": bool(p["confirmed"]), "action": p["action"],
                     "source": "manual" if p["merchant"].startswith("MANUAL:") else "bank",
+                    "remind": bool(p["remind"]), "cancel_planned": bool(p["cancel_planned"]),
+                    "cancelled_at": p["cancelled_at"],
                     "pay_all_total": E.pay_all_quote(s, plan) if p["id"] not in settled else None,
                     "pay_all_reserved": plan.amount if (plan.remaining_from(s.current) or 0) > 1 else 0,
                     "pay_all_gross": round((E.pay_all_quote(s, plan) or 0) +
@@ -199,7 +262,8 @@ def summary(con, user_id: int) -> dict:
         paid = days < 0 or p.id in paid_now
         items.append({**views[p.id], "due_date": due.isoformat(), "status": "paid" if paid else "upcoming",
                       "days_until": days,
-                      "before_salary": not paid and 0 <= days <= 5 and (next_salary - due).days <= 7})
+                      "before_salary": not paid and p.id and views[p.id]["kind"] != "subscription"
+                                       and 0 <= days <= 5 and (next_salary - due).days <= 7})
     visibility = subscriptions.cap(con, user_id, sorted(items, key=lambda p: (-p["amount"], p["id"])))
     items = visibility["items"]
     soon = [i for i in items if i["before_salary"]]
@@ -209,6 +273,10 @@ def summary(con, user_id: int) -> dict:
     for i in items:
         if i["remaining"] == 1:
             alerts.append({"type": "plan_ending", "name": i["name"], "frees": i["amount"]})
+    for i in items:
+        if i["kind"] == "subscription" and i["status"] == "upcoming" and i["remind"] and 0 <= i["days_until"] <= 3:
+            alerts.append({"type": "subscription_renewal", "id": i["id"], "name": i["name"], "amount": i["amount"],
+                           "days_until": i["days_until"], "cancel_planned": i["cancel_planned"]})
     if safe > 0 and s.spent_now / safe >= 0.7:
         alerts.append({"type": "spending_pace", "pct": round(s.spent_now / safe * 100), "days_to_salary": (next_salary - t).days})
     distribution = budget.view(con, user_id, s)
@@ -226,8 +294,25 @@ def summary(con, user_id: int) -> dict:
         "alerts": alerts,
         "categories": {"essentials": s.extra["essentials_by_category"], "flexible": s.extra["flexible_by_category"]},
         "budget": distribution, "entitlements": subscriptions.entitlements(con, user_id),
+        "essentials_now": _essentials_now(con, user_id, s),
+        "banks": banks(con, user_id),
         "hidden_count": visibility["hidden_count"], "locked_message": visibility["locked_message"],
     }
+
+
+def _essentials_now(con, user_id: int, s) -> dict:
+    """Living expenses actually recorded this salary cycle, next to the usual 3-month average."""
+    ov = overrides(con, user_id)
+    by_cat: dict[str, float] = {}
+    for x in _txs(con, user_id, s.extra["today"]):
+        if x["direction"] != "debit" or E.cycle_index(x["date"], s.profile.salary_day) != s.current:
+            continue
+        cat = x["category"] or detect.categorize(x["merchant"], x["description"], ov) or ""
+        if cat.startswith("essential:"):
+            name = cat.split(":", 1)[1]
+            by_cat[name] = round(by_cat.get(name, 0) + x["amount"], 2)
+    return {"total": round(sum(by_cat.values()), 2), "average": s.profile.essentials,
+            "by_category": dict(sorted(by_cat.items(), key=lambda kv: -kv[1]))}
 
 
 # ---------- expenses ----------
@@ -235,13 +320,14 @@ def expenses(con, user_id: int) -> list[dict]:
     """Read-only bank debits plus separately stored, deletable manual entries."""
     rows = con.execute(
         "SELECT CASE WHEN source='manual' THEN 'legacy:' ELSE 'bank:' END || id AS id, "
-        "date, amount, direction, merchant, description, category, source "
+        "date, amount, direction, merchant, description, category, source, bank_id "
         "FROM transactions WHERE user_id=? AND direction='debit' "
         "UNION ALL SELECT id, date, amount, 'debit', merchant, description, category, "
-        "'manual' FROM manual_expenses WHERE user_id=? ORDER BY date DESC, id DESC",
+        "'manual', NULL FROM manual_expenses WHERE user_id=? ORDER BY date DESC, id DESC",
         (user_id, user_id),
     )
-    return [dict(r, deletable=r["source"] == "manual") for r in rows]
+    return [dict(r, deletable=r["source"] == "manual",
+                 bank_name=provider.bank_name(r["bank_id"]) if r["source"] != "manual" else "يدوي") for r in rows]
 
 
 def add_expense(con, user_id: int, amount: float, merchant: str | None = None, category: str = "",
@@ -263,7 +349,7 @@ def add_expense(con, user_id: int, amount: float, merchant: str | None = None, c
     )
     return {"id": item_id, "date": expense_date.isoformat(), "amount": amount,
             "direction": "debit", "merchant": merchant, "description": description,
-            "category": category, "source": "manual", "deletable": True}
+            "category": category, "source": "manual", "bank_id": None, "deletable": True, "bank_name": "يدوي"}
 
 
 def delete_expense(con, user_id: int, item_id: str) -> bool:
@@ -297,7 +383,7 @@ def wishlist(con, user_id: int, internal: bool = False) -> list[dict]:
                      else f"بعد {months} شهور" if months and months <= 10 else f"بعد {months} شهر" if months
                      else "أكثر من 3 سنين")
             item["saving"] = saving
-        item.update(status=st, when_label=label)
+        item.update(status=st, when_label=label, method_label=method_label(item["method"]))
         if not internal and not subscriptions.current(con, user_id)["smart_account"]:
             st["whenK"] = 0 if st["ok"] else None
             item["when_label"] = "هالشهر" if st["ok"] else "ترقّ عشان تعرف متى تقدر تشتريه"
@@ -307,6 +393,19 @@ def wishlist(con, user_id: int, internal: bool = False) -> list[dict]:
                                   "buyK": None, "months": None, "salary_pct": None}
         out.append(item)
     return out
+
+
+METHOD_LABELS = {"cash": "كاش", "bnpl3": "3 دفعات", "bnpl4": "4 دفعات", "bnpl6": "6 شهور",
+                 "fin12": "تمويل 12 شهر", "save": "تجمع أول"}
+
+
+def method_label(method: str) -> str:
+    if method.startswith("loan:"):
+        import loans
+        _, lid, months = method.split(":")
+        lend = loans.lender(lid)
+        return f"تمويل {lend['name'] if lend else lid}، {loans.o_months(int(months))}"
+    return METHOD_LABELS.get(method, method)
 
 
 def add_wish(con, user_id: int, name: str, price: float, method: str) -> dict:
@@ -429,7 +528,8 @@ def obligations_view(con, user_id: int) -> dict:
     previous = []
     for p in plans_view(con, user_id):
         if p["remaining"] == 0:
-            previous.append({**p, "type": "installment", "status": "completed", "in_formula": False,
+            previous.append({**p, "type": "subscription" if p["kind"] == "subscription" else "installment",
+                             "status": "cancelled" if p.get("cancelled_at") else "completed", "in_formula": False,
                              "due_date": None})
     seen = {}
     ov = overrides(con, user_id)
@@ -465,7 +565,10 @@ def obligations_view(con, user_id: int) -> dict:
 
 def offer_comparison(con, user_id: int, price: float, target_months: int | None = None) -> dict:
     subscriptions.require(con, user_id, "planner")
-    return offers.compare(snapshot(con, user_id), price, target_months)
+    s = snapshot(con, user_id)
+    debt = sum(p["amount"] for p in plans_view(con, user_id)
+               if p["kind"] in ("bnpl", "loan") and (p["remaining"] is None or p["remaining"] > 0))
+    return offers.compare(s, price, target_months, debt)
 
 
 def consume_chat_question(con, user_id: int) -> bool:

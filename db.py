@@ -187,10 +187,24 @@ def _columns(con, table):
 def migrate(con):
     con.executescript(EXTRA_SCHEMA)
     for table, column, ddl in (("users", "phone_hash", "TEXT"), ("users", "phone_last3", "TEXT"),
-                               ("users", "email", "TEXT"), ("plans", "pay_mode", "TEXT")):
+                               ("users", "email", "TEXT"), ("plans", "pay_mode", "TEXT"),
+                               ("transactions", "bank_id", "TEXT"), ("plans", "remind", "INTEGER NOT NULL DEFAULT 1"),
+                               ("plans", "cancel_planned", "INTEGER NOT NULL DEFAULT 0"), ("plans", "cancelled_at", "TEXT")):
         if column not in _columns(con, table):
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone_hash) WHERE phone_hash IS NOT NULL")
+    # Before multi-bank support, bank rows belonged to the single active consent.
+    # Tag only unambiguous legacy rows; do not guess for users with several banks.
+    con.execute("""
+        UPDATE transactions SET bank_id=(
+            SELECT MIN(bank_id) FROM consents
+            WHERE consents.user_id=transactions.user_id AND status='active'
+        )
+        WHERE source='bank' AND bank_id IS NULL AND (
+            SELECT COUNT(DISTINCT bank_id) FROM consents
+            WHERE consents.user_id=transactions.user_id AND status='active'
+        )=1
+    """)
     # manual_expenses had a CHECK with the old personal category names: rebuild without it.
     ddl = con.execute("SELECT sql FROM sqlite_master WHERE name='manual_expenses'").fetchone()
     if ddl and "category IN" in ddl["sql"]:
@@ -217,10 +231,10 @@ def migrate(con):
 def init():
     with tx() as con:
         con.executescript(SCHEMA)
-        migrate(con)
         columns = {r["name"] for r in con.execute("PRAGMA table_info(transactions)")}
         if "source" not in columns:
             con.execute("ALTER TABLE transactions ADD COLUMN source TEXT NOT NULL DEFAULT 'bank'")
+        migrate(con)
         if "reserved_amount" not in {r["name"] for r in con.execute("PRAGMA table_info(plan_settlements)")}:
             con.execute("ALTER TABLE plan_settlements ADD COLUMN reserved_amount REAL NOT NULL DEFAULT 0")
         # Only pre-existing demo users start Plus; production defaults Basic.

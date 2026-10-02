@@ -104,6 +104,9 @@ def payment_schedule(count: int, total: float) -> list[float]:
 
 
 def schedule(method: str, price: float) -> tuple[list[float], float]:
+    if method.startswith("loan:"):
+        import loans   # lazy: loans imports engine
+        return loans.schedule(method, price)
     if method == "cash":
         return [price], price
     if method == "bnpl4":

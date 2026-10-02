@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#1c1a28">
+  <meta name="theme-color" content="#1f1d26">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="مُدار">
@@ -13,8 +13,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script>try{document.documentElement.dataset.theme=localStorage.getItem("mudar_theme")||"dark"}catch(_){}</script>
-  <link rel="stylesheet" href="/static/app.css?v=3">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem("mudar_theme")||"dark";if(localStorage.getItem("mudar_lang")==="en"){document.documentElement.lang="en";document.documentElement.dir="ltr"}}catch(_){}</script>
+  <link rel="stylesheet" href="/static/app.css?v=5">
   <title>مُدار</title>
 </head>
 <body>
@@ -28,6 +28,7 @@
   <div id="layer"></div>
   <div class="toasts" id="toasts" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/i18n.js?v=5"></script>
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>
