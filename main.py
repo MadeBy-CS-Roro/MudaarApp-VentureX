@@ -69,7 +69,7 @@ app = FastAPI(title="Mawid API", version="0.1", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
-    allow_methods=["GET", "POST", "DELETE"] if PRODUCTION_MODE else ["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"] if PRODUCTION_MODE else ["*"],
     allow_headers=["Authorization", "Content-Type"] if PRODUCTION_MODE else ["*"],
 )
 limiter = security.RateLimiter(limit=int(os.getenv("RATE_LIMIT", "120")), window=60)
@@ -90,6 +90,10 @@ class WishIn(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     price: float = Field(gt=0, le=1_000_000)
     method: Literal["cash", "bnpl4", "fin12", "save"]
+
+class WishUpdate(BaseModel):
+    price: Optional[float] = Field(default=None, gt=0, le=1_000_000)
+    method: Optional[Literal["cash", "bnpl4", "fin12", "save"]] = None
 
 class CategoryIn(BaseModel):
     merchant: str = Field(min_length=1, max_length=80)
@@ -195,6 +199,21 @@ def post_wishlist(body: WishIn, user=Depends(current_user)):
     with db.tx() as con:
         service.add_wish(con, user["id"], body.name, body.price, body.method)
         db.audit(con, user["hash"], "wishlist.added", {"method": body.method})
+        return {"items": service.wishlist(con, user["id"])}
+
+
+@app.patch("/api/wishlist/{item_id}")
+def patch_wishlist(item_id: int, body: WishUpdate, user=Depends(current_user)):
+    updates = body.model_dump(exclude_unset=True)
+    if not updates or any(value is None for value in updates.values()):
+        raise HTTPException(422, "حدد السعر أو طريقة الشراء بقيمة صحيحة.")
+
+    with db.tx() as con:
+        if not service.update_wish(
+            con, user["id"], item_id, updates.get("price"), updates.get("method")
+        ):
+            raise HTTPException(404, "العنصر غير موجود.")
+        db.audit(con, user["hash"], "wishlist.updated", {"fields": sorted(updates)})
         return {"items": service.wishlist(con, user["id"])}
 
 

@@ -196,6 +196,17 @@ def add_wish(con, user_id: int, name: str, price: float, method: str) -> dict:
     return {"added": not exists, "name": name, "price": price, "method": method}
 
 
+def update_wish(con, user_id: int, item_id: int, price: float | None = None, method: str | None = None) -> bool:
+    if price is None and method is None:
+        return False
+    updated = con.execute(
+        "UPDATE wishlist SET price=COALESCE(?, price), method=COALESCE(?, method) "
+        "WHERE id=? AND user_id=?",
+        (price, method, item_id, user_id),
+    )
+    return updated.rowcount > 0
+
+
 # ---------- demo: skip to next month ----------
 def next_month(con, user_id: int) -> dict:
     before = snapshot(con, user_id)

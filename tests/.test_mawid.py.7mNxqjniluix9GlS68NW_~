@@ -196,30 +196,6 @@ def test_repeated_wishlist_submission_returns_one_saved_item(client):
     assert listed_matches == first_matches
 
 
-def test_wishlist_item_can_update_price_and_method_independently(client):
-    created = client.post("/api/wishlist", json={"name": "سماعة لاسلكية", "price": 800, "method": "cash"})
-    item = next(entry for entry in created.json()["items"] if entry["name"] == "سماعة لاسلكية")
-
-    price_update = client.patch(f"/api/wishlist/{item['id']}", json={"price": 1600})
-    assert price_update.status_code == 200
-    updated = next(entry for entry in price_update.json()["items"] if entry["id"] == item["id"])
-    assert updated["price"] == 1600
-    assert updated["method"] == "cash"
-
-    method_update = client.patch(f"/api/wishlist/{item['id']}", json={"method": "fin12"})
-    assert method_update.status_code == 200
-    updated = next(entry for entry in method_update.json()["items"] if entry["id"] == item["id"])
-    assert updated["price"] == 1600
-    assert updated["method"] == "fin12"
-    assert "status" in updated and "when_label" in updated
-
-    listed = client.get("/api/wishlist")
-    listed_item = next(entry for entry in listed.json()["items"] if entry["id"] == item["id"])
-    assert listed_item["price"] == 1600
-    assert listed_item["method"] == "fin12"
-    assert listed_item["status"] == updated["status"]
-
-
 def test_wishlist_item_cannot_be_deleted_by_another_user(client):
     created = client.post("/api/wishlist", json={"name": "جهاز لوحي", "price": 1800, "method": "fin12"})
     item = next(item for item in created.json()["items"] if item["name"] == "جهاز لوحي")
@@ -242,38 +218,8 @@ def test_wishlist_item_cannot_be_deleted_by_another_user(client):
     assert any(entry["id"] == item["id"] for entry in still_owned.json()["items"])
 
 
-def test_wishlist_item_cannot_be_updated_by_another_user(client):
-    created = client.post("/api/wishlist", json={"name": "جهاز لوحي", "price": 1800, "method": "fin12"})
-    item = next(entry for entry in created.json()["items"] if entry["name"] == "جهاز لوحي")
-
-    other_user_hash = main.security.hash_id("wishlist-edit-other-user")
-    with main.db.tx() as con:
-        con.execute(
-            "INSERT INTO users(user_hash, display_name) VALUES (?, ?)",
-            (other_user_hash, "other"),
-        )
-    other_user_token = main.security.sign_token({"sub": other_user_hash, "mode": "demo"})
-    other_user_headers = {"Authorization": f"Bearer {other_user_token}"}
-
-    response = client.patch(
-        f"/api/wishlist/{item['id']}",
-        json={"price": 1, "method": "cash"},
-        headers=other_user_headers,
-    )
-    assert response.status_code == 404
-
-    still_owned = client.get("/api/wishlist")
-    unchanged = next(entry for entry in still_owned.json()["items"] if entry["id"] == item["id"])
-    assert unchanged["price"] == 1800
-    assert unchanged["method"] == "fin12"
-
-
 def test_bad_input_rejected(client):
     assert client.post("/api/scenarios", json={"price": -5}).status_code == 422
-    wishlist_item = client.get("/api/wishlist").json()["items"][0]
-    assert client.patch(f"/api/wishlist/{wishlist_item['id']}", json={}).status_code == 422
-    assert client.patch(f"/api/wishlist/{wishlist_item['id']}", json={"price": -5}).status_code == 422
-    assert client.patch(f"/api/wishlist/{wishlist_item['id']}", json={"method": "lease"}).status_code == 422
     assert client.get("/api/summary", headers={"Authorization": "Bearer forged.token"}).status_code == 401
 
 
