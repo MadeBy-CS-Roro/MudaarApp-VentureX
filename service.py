@@ -132,7 +132,7 @@ def confirm_plan(con, user_id: int, plan_id: str, amount: float | None, remainin
     cur = snapshot(con, user_id).current
     active_until = row["active_until"] if remaining is None else cur + remaining - 1
     con.execute("UPDATE plans SET confirmed=1, amount=?, active_until=? WHERE user_id=? AND id=?",
-                (amount or row["amount"], active_until, user_id, plan_id))
+                (row["amount"] if amount is None else amount, active_until, user_id, plan_id))
     return True
 
 

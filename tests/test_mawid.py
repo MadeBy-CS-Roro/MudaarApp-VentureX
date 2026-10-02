@@ -36,6 +36,38 @@ def test_plans_detected(client):
     assert plans["ejar"]["remaining"] is None and plans["ejar"]["action"]["value"] == "123456789"
 
 
+def test_confirm_plan_edits_update_plans_and_monthly_summary(client):
+    response = client.post(
+        "/api/plans/tamara/confirm",
+        json={"amount": 850, "remaining": 3},
+    )
+    assert response.status_code == 200
+
+    confirmed = {p["id"]: p for p in response.json()["plans"]}["tamara"]
+    assert confirmed["amount"] == 850
+    assert confirmed["remaining"] == 3
+    assert confirmed["confirmed"] is True
+
+    plans = {p["id"]: p for p in client.get("/api/plans").json()["plans"]}
+    assert plans["tamara"]["amount"] == 850
+    assert plans["tamara"]["remaining"] == 3
+
+    summary = client.get("/api/summary").json()
+    tamara = next(p for p in summary["plans"] if p["id"] == "tamara")
+    assert tamara["amount"] == 850
+    assert tamara["remaining"] == 3
+    assert summary["formula"]["obligations"] == 4350
+    assert summary["safe_to_spend"] == 350
+    before_salary = next(a for a in summary["alerts"] if a["type"] == "before_salary")
+    assert before_salary["amount"] == 850
+    assert before_salary["plans"][0]["name"] == "تمارا"
+
+
+def test_confirm_missing_plan_returns_not_found(client):
+    response = client.post("/api/plans/missing-plan/confirm", json={"amount": 850, "remaining": 3})
+    assert response.status_code == 404
+
+
 def test_summary_numbers(client):
     s = client.get("/api/summary").json()
     assert s["formula"] == {"salary": 8700, "obligations": 4100, "essentials": 3500, "buffer": 500}
