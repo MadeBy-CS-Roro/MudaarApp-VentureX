@@ -1,7 +1,5 @@
 # مُدار (Mudar)
 
-The latest uploaded version includes Arabic/English switching, multiple demo bank connections, subscription renewal/cancellation controls, and sample personal-loan comparisons. Saved data is preserved through additive migrations. SMS, bank connections, payments and lender offers remain demo-only; do not treat sample rates as real offers.
-
 FastAPI + SQLite. The engine does all the math. The assistant only explains tool results.
 
 ## Run on Replit
@@ -44,7 +42,7 @@ FastAPI + SQLite. The engine does all the math. The assistant only explains tool
 | POST | `/api/demo/reset` | | same as consent |
 
 `tightK`, `earliest`, `buyK`: months from now (0 = this month, 1 = next month).
-Demo auth: sign in through `/api/auth/demo` or the demo signup/verification flow, then send `Authorization: Bearer <token>`. Login is required even in demo mode; anonymous demo access is enabled only by the automated test setup.
+Demo auth: send `Authorization: Bearer <token>` from `/api/consent`; with demo mode enabled (default), the token is optional.
 
 Manual expenses use the same user authentication as the other API routes. Amounts must
 be positive, at most 1,000,000 SAR, and have at most two decimal places. Categories
@@ -125,3 +123,11 @@ After "next month": Tabby ends, safe to spend 900, phone notification fires.
 - Pay all: `GET /api/payments/due`, `POST /api/payments/pay` (demo only, simulated bank approval), `PATCH /api/plans/{id}` `{pay_mode}`.
 - Fixed categories: `GET /api/categories`.
 - Tests set `MUDAR_ALLOW_ANON=1` in tests/conftest.py so old tests can call without a token. Never set it on the live app.
+
+## Several banks, subscriptions, loans (v4)
+- `GET/POST/DELETE /api/banks` — connect more banks; every transaction keeps its `bank_id`, expenses show `bank_name`.
+- Subscriptions (Netflix, Shahid, Spotify…) are detected from card charges. Reminder 3 days before renewal;
+  `PATCH /api/plans/{id}` `{remind, cancel_planned}`; `POST /api/plans/{id}/cancelled`.
+- `POST /api/offers` now returns `offers` (installments), `loans` (banks + finance companies, every tenor with
+  monthly, profit, admin fee, total, APR, debt-burden after), `best`, `hidden` (why a group isn't offered), `dbr`, `save`.
+- Lender names and rates in `loans.py` are SAMPLE values. Replace them with real published rates before showing them as real.

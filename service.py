@@ -554,12 +554,18 @@ def obligations_view(con, user_id: int) -> dict:
                       "due_date": due.isoformat(), "status": "paid" if bill["paid_now"] else
                       "late" if due < s.extra["today"] else "upcoming", "remaining": None, "total": None,
                       "action": None, "confirmed": True, "in_formula": False, "source": "bank", "progress": None})
-    visibility = subscriptions.cap(con, user_id, sorted(items, key=lambda p: (p["type"] == "bill", -p["amount"], p["id"])))
+    # The plan limit counts commitments only (installments, loans, rent, subscriptions, manual ones).
+    # Bills are part of living costs and are always shown.
+    commitments = sorted([p for p in items if p["type"] != "bill"], key=lambda p: (-p["amount"], p["id"]))
+    bills = [p for p in items if p["type"] == "bill"]
+    visibility = subscriptions.cap(con, user_id, commitments)
+    visibility["items"] = visibility["items"] + bills
     return {"total": current_summary["obligations_total"], "plans_total": E.obligations(s, s.current),
             "essentials_total": s.profile.essentials, "essentials_by_category": s.extra["essentials_by_category"],
             "bills_total": sum(p["amount"] for p in items if p["type"] == "bill"),
             **visibility, "active_items": visibility["items"], "items": visibility["items"] + previous,
-            "total_count": len(items), "previous_payments": previous,
+            "total_count": len(commitments), "limit_info": subscriptions.limit_info(con, user_id, len(commitments)),
+            "previous_payments": previous,
             "counts": {status: sum(p["status"] == status for p in items) for status in ("paid", "upcoming", "late")}}
 
 
@@ -572,11 +578,7 @@ def offer_comparison(con, user_id: int, price: float, target_months: int | None 
 
 
 def consume_chat_question(con, user_id: int) -> bool:
-    cycle = snapshot(con, user_id).current
-    return con.execute(
-        "INSERT INTO chat_usage(user_id,cycle,questions) VALUES (?,?,1) "
-        "ON CONFLICT(user_id,cycle) DO UPDATE SET questions=questions+1 WHERE questions<5",
-        (user_id, cycle)).rowcount > 0
+    return subscriptions.check_question(con, user_id, snapshot(con, user_id).current)
 
 
 def account(con, user_id: int, demo_mode: bool) -> dict:
@@ -596,8 +598,10 @@ def account(con, user_id: int, demo_mode: bool) -> dict:
             "bank_id": bank_id, "bank_name": names.get(bank_id, bank_id),
             "consent_expires_at": consent["expires_at"] if consent else None,
             "salary_day": snap.profile.salary_day, "demo_mode": demo_mode,
-            "subscription": {**subscriptions.current(con, user_id), "assistant_questions": 5,
-                             "questions_used": used, "questions_left": max(0, 5 - used)},
+            "subscription": {**subscriptions.current(con, user_id), "questions_used": used,
+                             "questions_left": (None if subscriptions.current(con, user_id)["assistant_questions"] is None
+                                                else max(0, subscriptions.current(con, user_id)["assistant_questions"] - used))},
+            "limits": subscriptions.limit_info(con, user_id),
             "entitlements": subscriptions.entitlements(con, user_id),
             "tiers": subscriptions.response(con, user_id, demo_mode)["tiers"],
             "contact": {"email": os.getenv("MAWID_CONTACT_EMAIL"), "whatsapp": os.getenv("MAWID_CONTACT_WHATSAPP")}}

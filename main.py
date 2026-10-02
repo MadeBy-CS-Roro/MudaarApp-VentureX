@@ -4,15 +4,12 @@ Docs at /docs.  Put your front end in ./static/index.html to serve it from /.
 """
 from __future__ import annotations
 import os
-import asyncio
-import logging
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import date as Date
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import urlsplit
-from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,29 +72,10 @@ def _allowed_origins() -> list[str]:
     return list(dict.fromkeys(origins))
 
 
-async def _hourly_guest_cleanup():
-    while True:
-        await asyncio.sleep(3600)
-        try:
-            await asyncio.to_thread(db.cleanup_demo_guests)
-        except Exception:
-            logging.getLogger(__name__).exception("Demo guest cleanup failed")
-
-
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
-    cleanup_task = None
-    if DEMO_MODE:
-        await asyncio.to_thread(db.cleanup_demo_guests)
-        cleanup_task = asyncio.create_task(_hourly_guest_cleanup())
-    try:
-        yield
-    finally:
-        if cleanup_task is not None:
-            cleanup_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await cleanup_task
+    yield
 
 app = FastAPI(title="Mudar API", version="0.1", lifespan=lifespan)
 app.add_middleware(
@@ -312,19 +290,28 @@ def auth_verify(body: VerifyIn, request: Request):
         return out
 
 
+_last_guest_cleanup = [0.0]
+
+
+def _maybe_cleanup_guests(con):
+    import time
+    if time.time() - _last_guest_cleanup[0] > 3600:
+        _last_guest_cleanup[0] = time.time()
+        auth.cleanup_demo_guests(con)
+
+
 @app.post("/api/auth/demo")
 def auth_demo(request: Request):
-    """Quick login as Noura for the stage demo. Demo mode only."""
+    """Quick login for the stage demo. Every visitor gets a private copy of Noura's data,
+    so two judges trying it at the same time never see each other's actions. Demo mode only."""
     if not DEMO_MODE:
         raise HTTPException(404, "المسار غير متاح.")
     if not limiter.allow(request.client.host if request.client else "anon"):
         raise HTTPException(429, "طلبات كثيرة، جرب بعد دقيقة.")
-    user_hash = security.hash_id("demo-guest:" + uuid4().hex)
     with db.tx() as con:
-        con.execute("INSERT INTO users(user_hash,display_name,phone_last3,email,is_demo_guest) "
-                    "VALUES (?,'نورة','123','noura@example.com',1)", (user_hash,))
-        service.connect_bank(con, user_hash, "demo1")
-        user = con.execute("SELECT * FROM users WHERE user_hash=?", (user_hash,)).fetchone()
+        _maybe_cleanup_guests(con)
+        user = auth.new_demo_guest(con, service.connect_bank)
+        db.audit(con, user["user_hash"], "auth.demo_guest")
         return auth.session(con, user)
 
 
@@ -631,6 +618,42 @@ def get_account(user=Depends(current_user)):
         return service.account(con, user["id"], DEMO_MODE)
 
 
+class AccountIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    display_name: Optional[str] = Field(default=None, min_length=2, max_length=40)
+    email: Optional[str] = Field(default=None, max_length=120, pattern=r"^$|^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+@app.patch("/api/account")
+def patch_account(body: AccountIn, user=Depends(current_user)):
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(422, "ما فيه شي نعدّله.")
+    with db.tx() as con:
+        if "display_name" in changes and changes["display_name"]:
+            con.execute("UPDATE users SET display_name=? WHERE id=?", (changes["display_name"], user["id"]))
+        if "email" in changes:
+            con.execute("UPDATE users SET email=? WHERE id=?", (changes["email"] or None, user["id"]))
+        db.audit(con, user["hash"], "account.updated", {"fields": sorted(changes)})
+        return service.account(con, user["id"], DEMO_MODE)
+
+
+@app.post("/api/account/phone")
+def change_phone(body: PhoneIn, request: Request, user=Depends(current_user)):
+    _auth_rate(request, body.phone)
+    with db.tx() as con:
+        return _auth_out(auth.change_phone_start(con, user["id"], body.phone, DEMO_MODE))
+
+
+@app.post("/api/account/phone/verify")
+def change_phone_verify(body: VerifyIn, request: Request, user=Depends(current_user)):
+    _auth_rate(request, body.phone)
+    with db.tx() as con:
+        out = auth.change_phone_verify(con, user["id"], body.phone, body.code)
+        db.audit(con, user["hash"], "account.phone_changed")
+        return out
+
+
 @app.post("/api/contact")
 def post_contact(body: ContactIn, request: Request):
     if not contact_limiter.allow(request.client.host if request.client else "anon"):
@@ -645,7 +668,8 @@ def post_chat(body: ChatIn, user=Depends(current_user)):
     # Commit the atomic quota claim before waiting for an external LLM.
     with db.tx() as con:
         if not service.consume_chat_question(con, user["id"]):
-            raise HTTPException(429, "خلصت أسئلتك المجانية هالشهر. تتجدد الشهر الجاي، وباقي مزايا مُدار متاحة لك.")
+            allowed = subscriptions.current(con, user["id"])["assistant_questions"]
+            raise HTTPException(429, f"خلصت أسئلة المساعد في باقتك هالشهر ({allowed}). تتجدد الشهر الجاي، أو ترقّ لباقة فيها أسئلة أكثر.")
     with db.tx() as con:
         r = assistant.chat(con, user["id"], body.message, body.lang)
         db.audit(con, user["hash"], "chat", {"tools": r["tools"]})   # log tools used, not the message

@@ -574,24 +574,11 @@ async function renderHome() {
 
   const featured = renew || ending;
   const otherAlerts = s.alerts.filter(a => a.type !== "before_salary" && a !== featured);
-  const personal = (s.budget.target || []).find(t => t.id === "personal");
-  const cap = personal ? personal.amount : 0;
-  const flex = Object.entries(s.categories.flexible || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
-  const used = cap ? s.spent / cap : 0;
-
   $("#view").innerHTML = `
     <div class="slider" id="slider">${slide1}${slide2}${slide3}</div>
     <div class="dots" id="dots">${["باقي لك", "التزاماتك هالشهر", "المعيشة"].map((l, i) => `<button aria-label="${l}" data-slide="${i}" aria-current="${i === 0}"></button>`).join("")}</div>
     <div class="grid-2">${card1}${card2}</div>
     ${otherAlerts.length ? `<section class="card tight">${alertsHtml(otherAlerts)}</section>` : ""}
-    <section class="card">
-      <div class="card-head"><h2>مصروفاتك هالشهر</h2><a class="link-btn" href="#expenses">عرض الكل</a></div>
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
-        <span class="big">${money(s.spent)}</span><span class="muted">من حدك الشخصي ${money(cap)}</span></div>
-      <div class="bar ${used >= 1 ? "over" : used >= .8 ? "warn" : ""}"><span style="width:${Math.min(100, used * 100)}%"></span></div>
-      <div style="margin-top:10px">${flex.length ? flex.map(([k, v]) => `<div class="row"><span>${esc(k)}</span><span class="r">${money(v)}</span></div>`).join("")
-        : `<div class="empty">ما فيه مصروفات شخصية هالشهر للحين.</div>`}</div>
-    </section>
     <a class="card tap" href="#obligations" style="display:block;text-decoration:none">
       <div class="card-head"><h2>كيف نحسب «باقي لك»</h2></div>
       <div class="row"><span class="muted">الراتب</span><span class="r">${money(s.formula.salary)}</span></div>
@@ -713,6 +700,8 @@ async function recategorizeSheet(merchant) {
 async function renderObligations() {
   const [o, due, s, w] = await Promise.all([api("/api/obligations"), api("/api/payments/due"), api("/api/summary"), wishState()]);
   pageTop("الالتزامات", w.count, w.ready);
+  const L = o.limit_info || { limit: null, used: 0, left: null };
+  const full = L.limit !== null && L.left === 0;
   const today = new Date(s.today + "T00:00:00");
   const daysTo = iso => Math.round((new Date(iso + "T00:00:00") - today) / 86400000);
   const plans = o.active_items.filter(i => i.type !== "bill" && i.kind !== "subscription");
@@ -772,7 +761,9 @@ async function renderObligations() {
       <p class="muted" style="margin-top:-6px">نذكّرك قبل كل تجديد، عشان ما تتجدد اشتراكات ما تستخدمها.</p>
       ${subs.map(subCard).join("")}` : ""}
     ${o.hidden_count ? `<section class="card lock">${ic("lock")}<p>${esc(o.locked_message)}</p><a class="btn soft" href="#subscriptions">الباقات</a></section>` : ""}
-    <button class="btn ghost block" data-act="add-plan" style="margin-bottom:14px">${ic("plus")} أضف التزام فاته الربط</button>
+    ${L.limit !== null ? `<div class="note">${ic("card", "icon")} باقتك ${esc(L.plan_name || "")}: مستخدم ${L.used} من ${L.limit} التزامات${full ? "" : `، تقدر تضيف ${L.left === 1 ? "التزام واحد" : L.left === 2 ? "التزامين" : `${L.left} التزامات`}`}.</div>` : ""}
+    ${full ? `<section class="card tight" style="text-align:center"><p style="margin:0 0 10px">وصلت حد باقتك (${L.limit} التزامات). ترقّ عشان تضيف أكثر.</p><a class="btn soft" href="#subscriptions">شوف الباقات</a></section>`
+      : `<button class="btn ghost block" data-act="add-plan" style="margin-bottom:14px">${ic("plus")} أضف التزام فاته الربط</button>`}
     <section class="card">
       <div class="card-head"><h2>المعيشة</h2><span class="big">${money(o.essentials_total)}</span></div>
       <p class="muted" style="margin-top:-6px">متوسط آخر 3 شهور</p>
@@ -790,10 +781,16 @@ async function renderObligations() {
       ${p.total ? `<div class="muted">مجموع اللي دفعته: ${money(p.total * p.amount)}</div>` : ""}
     </article>`).join("") : `<div class="card empty">لما يخلص أي التزام بينتقل هنا تلقائياً.</div>`;
 
+  const target = (s.budget.target || []).find(t => t.id === "essentials") || { amount: 0, pct: 70 };
+  const usedPct = target.amount ? o.total / target.amount : 0;
+  const essWarn = s.alerts.filter(a => a.type === "essentials_budget_exceeded");
   $("#view").innerHTML = `
     <section class="card">
       <div class="muted">التزاماتك الشهرية</div>
-      <div class="huge" style="margin:4px 0 8px">${money(o.total)}</div>
+      <div class="huge" style="margin:4px 0 10px">${money(o.total)}</div>
+      <div class="bar ${usedPct > 1 ? "over" : usedPct >= .9 ? "warn" : "v"}"><span style="width:${Math.min(100, usedPct * 100)}%"></span></div>
+      <p class="muted" style="margin:8px 0 6px">حدك ${target.pct}% من راتبك = ${money(target.amount)}. تقدر تغيّره من «حسابي».</p>
+      ${essWarn.length ? `<div style="margin:6px 0 10px">${alertsHtml(essWarn)}</div>` : ""}
       <div class="row"><span class="muted">الالتزامات والإيجار</span><span class="r">${money(o.plans_total - subsTotal)}</span></div>
       ${subsTotal ? `<div class="row"><span class="muted">الاشتراكات</span><span class="r">${money(subsTotal)}</span></div>` : ""}
       <div class="row"><span class="muted">المعيشة (متوسط آخر 3 شهور)</span><span class="r">${money(o.essentials_total)}</span></div>
@@ -1122,6 +1119,7 @@ const BUDGET_COLORS = { essentials: "var(--violet-2)", personal: "var(--teal)", 
 async function renderAccount() {
   const [a, b, w, bk] = await Promise.all([api("/api/account"), api("/api/budget"), wishState(), api("/api/banks")]);
   S._banks = bk;
+  S._account = a;
   pageTop("حسابي", w.count, w.ready);
   const theme = document.documentElement.dataset.theme || "dark";
   const targets = Object.fromEntries((b.target || []).map(t => [t.id, t]));
@@ -1129,7 +1127,8 @@ async function renderAccount() {
   $("#view").innerHTML = `
     <section class="card">
       <div class="who" style="margin-bottom:12px"><span class="avatar" style="width:52px;height:52px;font-size:22px;border-radius:16px">${esc(T(a.display_name || "م").charAt(0))}</span>
-        <div><b style="font-size:18px">${esc(a.display_name || "")}</b><small dir="ltr" style="display:block;text-align:right">${esc(a.phone_masked || "")}</small></div></div>
+        <div style="flex:1"><b style="font-size:18px">${esc(a.display_name || "")}</b><small dir="ltr" style="display:block;text-align:right">${esc(a.phone_masked || "")}</small></div>
+        <button class="btn soft sm" data-act="edit-profile">تعديل</button></div>
       ${a.email ? `<div class="row"><span class="muted">الإيميل</span><span dir="ltr">${esc(a.email)}</span></div>` : ""}
       <div class="row"><span class="muted">يوم الراتب</span><span>${a.salary_day} من كل شهر</span></div>
     </section>
@@ -1143,7 +1142,8 @@ async function renderAccount() {
 
     <a class="card tap" href="#subscriptions" style="display:flex;justify-content:space-between;align-items:center;text-decoration:none">
       <div><div class="muted">باقتك الحالية</div><div class="big">${esc(a.subscription.name)}</div>
-        <div class="muted">${a.subscription.price ? `${fmt(a.subscription.price)} ر.س شهرياً` : "مجانية"}</div></div>
+        <div class="muted">${a.subscription.price ? `${fmt(a.subscription.price)} ر.س شهرياً` : "مجانية"}</div>
+        <div class="muted">${a.subscription.questions_left == null ? "أسئلة المساعد: بلا حد" : `أسئلة المساعد: باقي ${a.subscription.questions_left} من ${a.subscription.assistant_questions} هالشهر`}</div></div>
       <span class="btn soft sm">الباقات</span></a>
 
     <section class="card">
@@ -1234,18 +1234,21 @@ async function renderSubscriptions() {
   const yes = `<span class="teal">✓</span>`, no = `<span class="muted">✕</span>`;
   $("#view").innerHTML = `
     <p class="page-sub">كل اللي تحتاجه عشان تعرف وضعك موجود في الأساسية. الباقات الثانية تضيف مزايا.</p>
+    ${r.usage && r.usage.limit !== null ? `<div class="note">مستخدم ${r.usage.used} من ${r.usage.limit} التزامات في باقتك الحالية.</div>` : ""}
     ${r.tiers.map(t => `<article class="plan ${t.id === cur ? "current" : ""}">
       <div class="card-head" style="margin:0"><b style="font-size:18px">${esc(t.name)}</b>
         ${t.id === cur ? `<span class="badge b-paid">باقتك الحالية</span>` : ""}</div>
       <div class="huge" style="margin:6px 0 0">${t.price ? `${money(t.price)}<span class="muted" style="font-size:14px"> / شهر</span>` : "مجانية"}</div>
-      <ul>${t.features.map(f => `<li class="${f.startsWith("بدون") ? "no" : ""}">${f.startsWith("بدون") ? "✕" : "✓"} ${esc(f)}</li>`).join("")}</ul>
+      ${t.includes_previous ? `<p class="muted" style="margin:10px 0 0">كل اللي في ${esc(t.includes_previous)}، وزيادة:</p>` : `<p class="muted" style="margin:10px 0 0">تشمل:</p>`}
+      <ul>${t.features.map(f => `<li>✓ ${esc(f)}</li>`).join("")}</ul>
       ${t.id === cur ? `<button class="btn ghost block" disabled>باقتك الحالية</button>` : `<button class="btn block" data-act="upgrade">${t.price > r.current.price ? "ترقية" : "انتقل لها"}</button>`}
     </article>`).join("")}
     <section class="card">
       <h2>مقارنة سريعة</h2>
       <div class="cmp-wrap"><table class="cmp">
         <tr><th></th>${r.tiers.map(t => `<th>${esc(t.name)}</th>`).join("")}</tr>
-        <tr><td>الالتزامات المعروضة</td>${r.tiers.map(t => `<td>${t.obligation_limit == null ? "بلا حد" : t.obligation_limit}</td>`).join("")}</tr>
+        <tr><td>الالتزامات</td>${r.tiers.map(t => `<td>${t.obligation_limit == null ? "بلا حد" : t.obligation_limit}</td>`).join("")}</tr>
+        <tr><td>أسئلة المساعد بالشهر</td>${r.tiers.map(t => `<td>${t.assistant_questions == null ? "بلا حد" : t.assistant_questions}</td>`).join("")}</tr>
         <tr><td>الحساب الذكي</td>${r.tiers.map(t => `<td>${t.smart_account ? yes : no}</td>`).join("")}</tr>
         <tr><td>محاكاة الالتزامات المحدثة</td>${r.tiers.map(t => `<td>${t.planner ? yes : no}</td>`).join("")}</tr>
         <tr><td>محاكاة التوقعات المالية</td>${r.tiers.map(t => `<td>${t.forecast ? yes : no}</td>`).join("")}</tr>
@@ -1255,6 +1258,50 @@ async function renderSubscriptions() {
     ${r.demo_mode ? `<section class="card"><h2>تبديل الباقة (للديمو)</h2>
       <div class="seg">${r.tiers.map(t => `<button data-plan-switch="${t.id}" aria-pressed="${t.id === cur}">${esc(t.name)}</button>`).join("")}</div>
       <p class="muted" style="margin:8px 0 0">بدون دفع، عشان تشوف الفرق بين الباقات.</p></section>` : ""}`;
+}
+
+function profileSheet() {
+  const a = S._account || {};
+  const sheet = openSheet({ title: "بياناتك", body: `
+    <form id="f-profile">
+      <label class="field"><span>الاسم</span><input name="display_name" required minlength="2" maxlength="40" value="${esc(T(a.display_name || ""))}"></label>
+      <label class="field"><span>الإيميل (اختياري)</span><input name="email" type="email" dir="ltr" value="${esc(a.email || "")}"></label>
+      <button class="btn block" type="submit">حفظ</button>
+    </form>
+    <h2 style="font-size:15px;margin:22px 0 8px">رقم الجوال</h2>
+    <p class="muted" style="margin-top:0">رقمك الحالي <span dir="ltr">${esc(a.phone_masked || "—")}</span>. لتغييره بنرسل رمز للرقم الجديد.</p>
+    <form id="f-phone">
+      <label class="field"><span>الرقم الجديد</span><input name="phone" required inputmode="tel" dir="ltr" placeholder="05XXXXXXXX"></label>
+      <div id="phone-code" hidden>
+        <div class="alert good" id="phone-demo" hidden></div>
+        <label class="field"><span>رمز التحقق</span><input name="code" inputmode="numeric" maxlength="6" dir="ltr"></label>
+      </div>
+      <button class="btn ghost block" type="submit" id="phone-btn">أرسل الرمز</button>
+    </form>` });
+  $("#f-profile", sheet).addEventListener("submit", async e => {
+    e.preventDefault();
+    try {
+      await api("/api/account", { method: "PATCH", body: { display_name: e.target.display_name.value.trim(), email: e.target.email.value.trim() } });
+      if (S.me) S.me.name = e.target.display_name.value.trim();
+      closeSheet(); toast("حفظنا بياناتك.", "good"); refresh();
+    } catch (err) { handleError(err); }
+  });
+  let sent = false;
+  $("#f-phone", sheet).addEventListener("submit", async e => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      if (!sent) {
+        const r = await api("/api/account/phone", { method: "POST", body: { phone: f.phone.value.trim() } });
+        sent = true; $("#phone-code", sheet).hidden = false; $("#phone-btn", sheet).textContent = T("تأكيد الرقم");
+        if (r.demo_code) { const d = $("#phone-demo", sheet); d.hidden = false; d.innerHTML = `${T("رمزك التجريبي:")} <b dir="ltr">${esc(r.demo_code)}</b>`; }
+        f.code.focus();
+      } else {
+        await api("/api/account/phone/verify", { method: "POST", body: { phone: f.phone.value.trim(), code: f.code.value.trim() } });
+        closeSheet(); toast("غيّرنا رقم جوالك.", "good"); refresh();
+      }
+    } catch (err) { handleError(err); }
+  });
 }
 
 async function addBankSheet() {
@@ -1356,6 +1403,7 @@ document.addEventListener("click", async e => {
   if (act === "wish-save") return addWishFromPlanner("save");
   if (act === "wish-chosen") return addWishFromPlanner(S.planner._chosenMethod);
   if (act === "add-bank") return addBankSheet();
+  if (act === "edit-profile") return profileSheet();
   if (act === "reset") {
     if (!ask("بنبدأ الديمو من جديد ونمسح البيانات الحالية. تبي نكمل؟")) return;
     try { const r = await api("/api/demo/reset", { method: "POST" }); setToken(r.token); S.chat = []; showDetected(); } catch (err) { handleError(err); }

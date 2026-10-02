@@ -125,8 +125,8 @@ def test_pay_mode_toggle_and_production(app_client, monkeypatch):
     assert r["payable"] == [] and any(i["id"] == "tamara" for i in r["auto"])
     app_client.patch("/api/plans/tamara", json={"pay_mode": "manual"}, headers=hd)
     monkeypatch.setattr(main, "DEMO_MODE", False)
-    original = main.security.verify_token(hd["Authorization"].removeprefix("Bearer "))
-    token = main.security.sign_token({"sub": original["sub"], "mode": "production"})
+    sub = main.security.verify_token(hd["Authorization"][7:])["sub"]
+    token = main.security.sign_token({"sub": sub, "mode": "production"})
     monkeypatch.setattr(main, "PRODUCTION_MODE", True)
     r = app_client.post("/api/payments/pay", json={"item_ids": ["tamara"]}, headers=h(token))
     assert r.status_code == 501
@@ -150,3 +150,75 @@ def test_completed_obligation_moves_to_previous(app_client):
     data = app_client.get("/api/obligations", headers=hd).json()
     assert any(p["name"] == "تابي" for p in data["previous_payments"])
     assert not any(p["name"] == "تابي" for p in data["active_items"])
+
+
+def test_each_quick_demo_visitor_gets_a_private_copy(app_client):
+    a, b = demo(app_client), demo(app_client)
+    assert app_client.get("/api/summary", headers=a).json()["available"] == 180
+    app_client.post("/api/payments/pay", json={"item_ids": ["tamara"]}, headers=a)
+    app_client.post("/api/wishlist", json={"name": "ساعة", "price": 900, "method": "save"}, headers=a)
+    assert app_client.get("/api/payments/due", headers=b).json()["payable_total"] == 600
+    assert "ساعة" not in [w["name"] for w in app_client.get("/api/wishlist", headers=b).json()["items"]]
+
+
+def test_old_demo_guests_are_cleaned_up_but_real_users_stay(app_client):
+    demo(app_client)
+    real = signup(app_client)
+    with main.db.tx() as con:
+        con.execute("UPDATE users SET created_at='2020-01-01 00:00:00'")
+        removed = main.auth.cleanup_demo_guests(con)
+        assert removed == 1
+        assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+    assert app_client.get("/api/auth/me", headers=h(real["token"])).status_code == 200
+
+
+def test_edit_personal_info_and_phone(app_client):
+    hd = demo(app_client)
+    r = app_client.patch("/api/account", json={"display_name": "نورة العتيبي", "email": "n@example.com"}, headers=hd)
+    assert r.status_code == 200 and r.json()["display_name"] == "نورة العتيبي" and r.json()["email"] == "n@example.com"
+    assert app_client.patch("/api/account", json={"email": "not-an-email"}, headers=hd).status_code == 422
+    code = app_client.post("/api/account/phone", json={"phone": "0557778889"}, headers=hd).json()["demo_code"]
+    assert app_client.post("/api/account/phone/verify", json={"phone": "0557778889", "code": "000000" if code != "000000" else "111111"}, headers=hd).status_code == 400
+    ok = app_client.post("/api/account/phone/verify", json={"phone": "0557778889", "code": code}, headers=hd)
+    assert ok.status_code == 200 and ok.json()["phone_masked"] == "05XX XXX 889"
+    # the new number now logs in to the same account
+    login = app_client.post("/api/auth/login", json={"phone": "0557778889"}).json()
+    v = app_client.post("/api/auth/verify", json={"phone": "0557778889", "code": login["demo_code"]}).json()
+    assert v["name"] == "نورة العتيبي"
+    # a number used by someone else can't be taken
+    signup(app_client, phone="0551231234", name="خالد")
+    assert app_client.post("/api/account/phone", json={"phone": "0551231234"}, headers=hd).status_code == 409
+
+
+def test_basic_plan_limits_apply_to_the_assistant(app_client):
+    hd = demo(app_client)
+    app_client.post("/api/demo/subscription", json={"plan": "basic"}, headers=hd)
+    r = app_client.post("/api/chat", json={"message": "أقدر آخذ جوال بـ 3000 على 4 دفعات؟"}, headers=hd).json()
+    assert "مو ضمن باقتك" in r["reply"] and not r["tools"]
+    app_client.post("/api/plans", json={"name": "خامس", "amount": 10, "day": 3, "kind": "recurring"}, headers=hd)
+    with main.db.tx() as con:
+        uid = con.execute("SELECT id FROM users WHERE is_demo_guest=1").fetchone()["id"]
+        import assistant
+        with __import__("pytest").raises(assistant.PlanLocked):
+            assistant.run_tool(con, uid, "add_obligation", {"name": "سادس", "amount": 10, "day": 3, "kind": "recurring"})
+    for _ in range(4):
+        assert app_client.post("/api/chat", json={"message": "كم عليّ هالشهر؟"}, headers=hd).status_code == 200
+    assert app_client.post("/api/chat", json={"message": "كم عليّ هالشهر؟"}, headers=hd).status_code == 429
+
+
+def test_plans_describe_cumulative_features(app_client):
+    hd = demo(app_client)
+    tiers = app_client.get("/api/subscriptions", headers=hd).json()["tiers"]
+    assert [t["includes_previous"] for t in tiers] == [None, "الأساسية", "بلس"]
+    assert any("5 التزامات" in f for f in tiers[0]["features"])
+    assert any("30 التزام" in f for f in tiers[1]["features"]) and any("بلا حد" in f for f in tiers[2]["features"])
+
+
+def test_assistant_adds_commitment_up_to_the_limit(app_client):
+    hd = demo(app_client)
+    app_client.post("/api/demo/subscription", json={"plan": "basic"}, headers=hd)
+    r = app_client.post("/api/chat", json={"message": "ضيف التزام نادي 150 يوم 5"}, headers=hd).json()
+    assert r["actions"] and "نادي" in r["actions"][0]["summary"]           # the 5th fits: confirmation card
+    assert app_client.post(f"/api/chat/actions/{r['actions'][0]['id']}/confirm", headers=hd).status_code == 200
+    r = app_client.post("/api/chat", json={"message": "ضيف التزام سباحة 100 يوم 9"}, headers=hd).json()
+    assert not r["actions"] and "5" in r["reply"]                           # the 6th is refused with the limit

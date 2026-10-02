@@ -3,8 +3,6 @@ const STATIC_FILES = [
   "/static/index.html",
   "/static/app.css",
   "/static/app.js",
-  "/static/i18n.js",
-  "/static/logo.png",
   "/static/manifest.json",
   "/static/icon-192.png",
   "/static/icon-512.png"

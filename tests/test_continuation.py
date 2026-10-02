@@ -120,14 +120,21 @@ def test_demo_plus_default_and_backend_gates(client):
 
 
 def test_subscription_caps_visible_data_and_creation(client):
-    data = client.get("/api/obligations").json()
-    assert data["total_count"] > 5
+    """Basic = 5 commitments. Noura has 4, so she can add EXACTLY one more; bills don't count."""
     switch(client, "basic")
     data = client.get("/api/obligations").json()
-    assert len(data["active_items"]) == 5 and data["hidden_count"] == data["total_count"] - 5
-    assert "ترقّ" in data["locked_message"] and data["total"] == 7600
-    response = client.post("/api/plans", json={"name": "اشتراك", "amount": 1, "day": 2, "kind": "recurring"})
-    assert response.status_code == 403
+    assert data["total_count"] == 4 and data["hidden_count"] == 0 and data["total"] == 7600
+    assert data["limit_info"] == {"limit": 5, "used": 4, "left": 1, "plan": "basic", "plan_name": "الأساسية"}
+    assert any(p["type"] == "bill" for p in data["active_items"])          # bills always shown
+    ok = client.post("/api/plans", json={"name": "اشتراك", "amount": 1, "day": 2, "kind": "recurring"})
+    assert ok.status_code == 200                                              # the 5th fits
+    blocked = client.post("/api/plans", json={"name": "سادس", "amount": 1, "day": 2, "kind": "recurring"})
+    assert blocked.status_code == 403 and "5" in blocked.json()["detail"]   # the 6th doesn't
+    with main.db.tx() as con:                                                 # bank adds more: visible cap still 5
+        con.execute("INSERT INTO plans(id,user_id,name,merchant,kind,amount,day) VALUES ('manual_x',?,'زيادة','MANUAL:x','recurring',1,2)", (uid(),))
+    data = client.get("/api/obligations").json()
+    assert len([p for p in data["active_items"] if p["type"] != "bill"]) == 5 and data["hidden_count"] == 1
+    assert "ترقّ" in data["locked_message"]
 
 
 def test_plus_limit_premium_unlimited_hidden_plan_mutation_blocked(client):
@@ -137,7 +144,7 @@ def test_plus_limit_premium_unlimited_hidden_plan_mutation_blocked(client):
             con.execute("INSERT INTO plans(id,user_id,name,merchant,kind,amount,day) VALUES (?,?,?,?,'recurring',1,2)",
                         (f"manual_extra_{i}", user_id, f"اشتراك {i}", f"MANUAL:{i}"))
     plus = client.get("/api/obligations").json()
-    assert len(plus["active_items"]) == 30 and plus["hidden_count"] > 0
+    assert len([p for p in plus["active_items"] if p["type"] != "bill"]) == 30 and plus["hidden_count"] > 0
     visible = {p["id"] for p in client.get("/api/plans").json()["plans"]}
     hidden = next(f"manual_extra_{i}" for i in range(31) if f"manual_extra_{i}" not in visible)
     assert client.post(f"/api/plans/{hidden}/confirm", json={"amount": 2}).status_code == 403
@@ -145,7 +152,8 @@ def test_plus_limit_premium_unlimited_hidden_plan_mutation_blocked(client):
     assert client.post(f"/api/plans/{hidden}/pay-all").status_code == 403
     switch(client, "premium")
     data = client.get("/api/obligations").json()
-    assert data["limit"] is None and data["hidden_count"] == 0 and len(data["active_items"]) == data["total_count"]
+    assert data["limit"] is None and data["hidden_count"] == 0
+    assert len([p for p in data["active_items"] if p["type"] != "bill"]) == data["total_count"]
     assert client.post("/api/plans", json={"name": "جديد", "amount": 1, "day": 2, "kind": "recurring"}).status_code == 200
 
 

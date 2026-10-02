@@ -134,3 +134,68 @@ def ensure_demo_user(con, demo_user_hash: str) -> object:
     con.execute("UPDATE users SET phone_hash=COALESCE(phone_hash,?), phone_last3=COALESCE(phone_last3,'123'), "
                 "email=COALESCE(email,'noura@example.com') WHERE user_hash=?", (ph, demo_user_hash))
     return con.execute("SELECT * FROM users WHERE user_hash=?", (demo_user_hash,)).fetchone()
+
+
+# ---------- editing personal info ----------
+def change_phone_start(con, user_id: int, phone_raw: str, demo_mode: bool) -> dict:
+    phone = normalize_phone(phone_raw)
+    if not phone:
+        raise HTTPException(422, "اكتب رقم جوال سعودي صحيح يبدأ بـ 05.")
+    if not demo_mode:
+        raise HTTPException(501, "إرسال الرسائل يحتاج مزود SMS.")
+    ph = phone_hash(phone)
+    owner = con.execute("SELECT id FROM users WHERE phone_hash=?", (ph,)).fetchone()
+    if owner and owner["id"] != user_id:
+        raise HTTPException(409, "هالرقم مسجل بحساب ثاني.")
+    code = _issue(con, ph, f"change:{user_id}")
+    return {"sent": True, "message": "أرسلنا رمز للرقم الجديد.", "demo_code": code}
+
+
+def change_phone_verify(con, user_id: int, phone_raw: str, code: str) -> dict:
+    phone = normalize_phone(phone_raw)
+    if not phone:
+        raise HTTPException(422, "اكتب رقم جوال سعودي صحيح يبدأ بـ 05.")
+    ph = phone_hash(phone)
+    row = con.execute("SELECT * FROM otp_codes WHERE phone_hash=?", (ph,)).fetchone()
+    now = _now().isoformat()
+    if not row or row["purpose"] != f"change:{user_id}":
+        raise HTTPException(400, "اطلب رمز جديد.")
+    if row["locked_until"] and row["locked_until"] > now:
+        raise HTTPException(429, "جرّب بعد 15 دقيقة.")
+    if row["expires_at"] <= now:
+        raise HTTPException(400, "انتهى الرمز، اطلب واحد جديد.")
+    if not hmac.compare_digest(row["code_hash"], _code_hash(ph, (code or "").strip())):
+        attempts = row["attempts"] + 1
+        locked = (_now() + LOCK_TIME).isoformat() if attempts >= MAX_ATTEMPTS else None
+        con.execute("UPDATE otp_codes SET attempts=?, locked_until=? WHERE phone_hash=?", (attempts, locked, ph))
+        con.commit()
+        raise HTTPException(429 if locked else 400, "جرّب بعد 15 دقيقة." if locked else "الرمز غلط.")
+    con.execute("DELETE FROM otp_codes WHERE phone_hash=?", (ph,))
+    con.execute("UPDATE users SET phone_hash=?, phone_last3=? WHERE id=?", (ph, phone[-3:], user_id))
+    return {"ok": True, "phone_masked": f"05XX XXX {phone[-3:]}"}
+
+
+# ---------- quick demo: every visitor gets a private copy ----------
+GUEST_TTL_HOURS = 24
+GUEST_TABLES = ("consents", "transactions", "manual_expenses", "plans", "wishlist", "demo_state", "category_overrides",
+                "pending_actions", "chat_usage", "cycle_payments", "savings_deposits", "plan_settlements", "user_preferences")
+
+
+def new_demo_guest(con, connect_bank) -> object:
+    import uuid
+    user_hash = security.hash_id("demo-guest:" + uuid.uuid4().hex)
+    con.execute("INSERT INTO users(user_hash, display_name, phone_last3, email, is_demo_guest) VALUES (?,?,?,?,1)",
+                (user_hash, "نورة", "123", "noura@example.com"))
+    connect_bank(con, user_hash, "demo1")
+    return con.execute("SELECT * FROM users WHERE user_hash=?", (user_hash,)).fetchone()
+
+
+def cleanup_demo_guests(con) -> int:
+    cutoff = (_now() - timedelta(hours=GUEST_TTL_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+    ids = [r["id"] for r in con.execute(
+        "SELECT id FROM users WHERE is_demo_guest=1 AND phone_hash IS NULL AND created_at < ?", (cutoff,))]
+    for uid in ids:
+        for table in GUEST_TABLES:
+            con.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
+        con.execute("DELETE FROM users WHERE id=?", (uid,))
+    return len(ids)

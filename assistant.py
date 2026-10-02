@@ -17,6 +17,8 @@ import httpx
 
 import engine as E
 import service
+import subscriptions
+from fastapi import HTTPException
 import actions
 import language
 
@@ -36,6 +38,7 @@ SYSTEM += """
 - طابق العدد مع المعدود صح: دفعة وحدة، دفعتين، 3 دفعات، 17 دفعة؛ يوم واحد، يومين، 3 أيام، 30 يوم.
 - خاطب المستخدم بالمفرد المذكر. استخدم هالشهر، الشهر الجاي، الحين، شهور، ر.س.
 - قل "الالتزامات" مو "الأقساط".
+- إذا رجعت أداة "locked"، قل للمستخدم إن الميزة مو ضمن باقته واذكر الباقة اللي فيها، وما تحاول تحسبها بنفسك.
 - قبل أي تعديل، اعرض الملخص وانتظر التأكيد. أدوات الكتابة تنشئ طلب تأكيد فقط، مو تعديل فعلي.
 - لا تقول إنك أضفت أو حذفت شي قبل ما المستخدم يأكد الطلب.
 - عروض الجهات تجريبية للتوضيح، مو عروض حقيقية. لا توصي بجهة؛ قل الأوفر لك حسب الحسابات.
@@ -66,12 +69,35 @@ for _name, _model in actions.WRITE_MODELS.items():
                   "input_schema": _model.model_json_schema()})
 
 
+class PlanLocked(Exception):
+    """A tool isn't included in the user's subscription plan."""
+
+
+TOOL_FEATURE = {"compare_scenarios": "planner", "compare_offers": "planner", "get_seasonal_forecast": "forecast"}
+FEATURE_LABEL = {"planner": "مقارنة طرق الشراء (المخطط)", "forecast": "التوقعات المالية", "smart_account": "الحساب الذكي"}
+
+
+def _require(con, user_id: int, name: str) -> None:
+    feature = TOOL_FEATURE.get(name)
+    if feature and not subscriptions.current(con, user_id)[feature]:
+        need = "بلس" if feature in ("planner", "smart_account") else "بريميوم"
+        raise PlanLocked(f"{FEATURE_LABEL[feature]} مو ضمن باقتك الحالية. تقدر تستخدمه بباقة {need} من «حسابي ← الباقات».")
+
+
 def run_tool(con, user_id: int, name: str, args: dict) -> dict:
+    _require(con, user_id, name)
     if name in actions.WRITE_MODELS:
+        if name == "add_obligation":
+            try:
+                subscriptions.check_creation(con, user_id)      # same limit as the app
+            except HTTPException as exc:
+                raise PlanLocked(exc.detail)
         try:
             return {"action": actions.propose(con, user_id, name, args)}
         except ValueError as exc:
             return {"error": str(exc)}
+        except HTTPException as exc:
+            raise PlanLocked(exc.detail)
     if name == "get_month_summary":
         s = service.summary(con, user_id)
         return {k: s[k] for k in ("salary", "obligations_total", "safe_to_spend", "spent", "available", "alerts")}
@@ -104,7 +130,10 @@ def chat(con, user_id: int, message: str, lang: str = "ar") -> dict:
             return result
         except Exception as e:   # network/LLM failure -> never break the demo
             print("LLM failed, falling back:", e)
-    result = _chat_rules_en(con, user_id, message) if lang == "en" else _chat_rules(con, user_id, message)
+    try:
+        result = _chat_rules_en(con, user_id, message) if lang == "en" else _chat_rules(con, user_id, message)
+    except PlanLocked as exc:
+        result = {"reply": str(exc), "tools": [], "locked": True}
     result["mode"] = "rules"
     result.setdefault("actions", [])
     return result
@@ -132,7 +161,10 @@ def _chat_llm(con, user_id: int, message: str, lang: str = "ar") -> dict:
         results = []
         for c in calls:
             used.append(c["name"])
-            out = run_tool(con, user_id, c["name"], c["input"])
+            try:
+                out = run_tool(con, user_id, c["name"], c["input"])
+            except PlanLocked as exc:
+                out = {"locked": True, "message": str(exc)}
             if "action" in out:
                 proposals.append(out["action"])
             results.append({"type": "tool_result", "tool_use_id": c["id"], "content": json.dumps(out, ensure_ascii=False)})
@@ -167,6 +199,18 @@ def _chat_rules(con, user_id: int, m: str) -> dict:
         out = run_tool(con, user_id, "add_expense", {"name": name, "amount": nums[-1], "category": category})
         return _proposal_reply(out, "add_expense")
 
+    if re.search(r"(ضيف|أضف|اضف|سجل|سجّل).*التزام", m):
+        nums = _num(m)
+        day_m = re.search(r"يوم\s*(\d+)", m.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")))
+        day = int(day_m.group(1)) if day_m else 1
+        amounts = [n for n in nums if not (day_m and n == day)]
+        if not amounts:
+            return {"reply": "كم المبلغ الشهري؟ اكتب مثلاً: ضيف التزام نادي 150 يوم 5.", "tools": []}
+        name = re.split(r"التزام\s*", m, maxsplit=1)[-1]
+        name = re.sub(r"[\d٠-٩,\.]+.*$", "", name).strip() or "التزام"
+        out = run_tool(con, user_id, "add_obligation", {"name": name, "amount": amounts[0], "day": min(28, max(1, day)), "kind": "recurring"})
+        return _proposal_reply(out, "add_obligation")
+
     if re.search(r"حط|أمني|امني|ذكرني", m):
         name_match = re.search(r"(?:حط|ضيف|أضف)\s+(.+?)(?:\s+ب|بال|في)?(?:الأمنيات|الامنيات|أمنيات|امنيات)", m)
         name = name_match.group(1).strip() if name_match else ctx["name"]
@@ -198,9 +242,9 @@ def _chat_rules(con, user_id: int, m: str) -> dict:
         return {"reply": f"التزاماتك هالشهر مع المعيشة {_f(s['obligations_total'])} ر.س. الالتزامات والإيجار: {names}. وتقدر تصرف {_f(s['available'])} ر.س الحين.",
                 "tools": ["get_month_summary", "list_plans"]}
 
-    if re.search(r"كم.*(?:أقدر|اقدر|تقدر).*صرف|المتاح|باقي لي|باقيلي", m):
+    if re.search(r"كم.*(?:أقدر|اقدر).*أ?صرف", m):
         s = run_tool(con, user_id, "get_month_summary", {})
-        return {"reply": f"تقدر تصرف {_f(s['available'])} ر.س الحين، بعد التزاماتك ومصاريفك وهامش الأمان.",
+        return {"reply": f"تقدر تصرف {_f(s['available'])} ر.س الحين، بعد الالتزامات والمصاريف واحتياطي الأمان.",
                 "tools": ["get_month_summary"]}
 
     if re.search(r"صرف|مصاريف", m):
@@ -258,6 +302,17 @@ def _chat_rules_en(con, user_id: int, m: str) -> dict:
         category = "flexible:مطاعم ومقاهي" if re.search(r"coffee|cafe|lunch|dinner|breakfast|restaurant", low) else "flexible:أخرى"
         out = run_tool(con, user_id, "add_expense", {"name": name.title(), "amount": nums[-1], "category": category})
         return _proposal_reply_en(out, "add_expense")
+
+    if re.search(r"(add|log).*(commitment|obligation|bill|subscription)", low):
+        day_m = re.search(r"day\s*(\d+)", low)
+        day = int(day_m.group(1)) if day_m else 1
+        amounts = [n for n in _num(m) if not (day_m and n == day)]
+        if not amounts:
+            return {"reply": "What's the monthly amount? For example: add a commitment gym 150 day 5.", "tools": []}
+        nm = re.search(r"(?i)(?:commitment|obligation|bill|subscription)\s+(?:for\s+)?([^\d]+)", m)
+        name = (nm.group(1).strip() if nm else "Commitment").title()
+        out = run_tool(con, user_id, "add_obligation", {"name": name, "amount": amounts[0], "day": min(28, max(1, day)), "kind": "recurring"})
+        return _proposal_reply_en(out, "add_obligation")
 
     if re.search(r"wish ?list|remind me", low):
         name = "Phone" if "phone" in low else ctx["name"] if not re.search("[\u0600-\u06FF]", ctx["name"]) else "Phone"

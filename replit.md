@@ -51,7 +51,7 @@ Contact form submissions are stored locally and rate limited. Public email/Whats
 ## Login and payments (latest)
 - Passwordless login: `POST /api/auth/signup`, `/api/auth/login`, `/api/auth/verify` (phone + 6-digit code).
   Demo mode returns `demo_code` and shows it on screen. Production returns 501 until an SMS provider is set.
-- Quick demo login as Noura: `POST /api/auth/demo` creates a private guest copy each time. Its phone hash stays NULL. Existing browser tokens return to the same copy until logout or expiry. Startup and hourly cleanup delete flagged guests older than 24 hours, never phone-registered accounts.
+- Quick demo login as Noura: `POST /api/auth/demo` creates a private guest copy each time. Its phone hash stays NULL. Existing browser tokens return to the same copy until logout or expiry. The uploaded version checks expired guests during quick login, at most once per hour; phone-registered accounts are protected.
 - All `/api` routes need the token, except health, categories, contact and auth.
 - `POST /api/consent` connects the bank for the logged-in user.
 - Pay all: `GET /api/payments/due`, `POST /api/payments/pay` (demo only, simulated bank approval), `PATCH /api/plans/{id}` `{pay_mode}`.

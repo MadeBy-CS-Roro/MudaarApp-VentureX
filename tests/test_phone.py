@@ -242,7 +242,8 @@ def test_contact_validation_rate_limit_and_account(client, monkeypatch):
     assert info["salary_day"] == 27 and info["bank_id"] == "demo1"
     assert info["consent_expires_at"]
     assert [t["price"] for t in info["tiers"]] == [0, 29, 79]
-    assert info["subscription"]["assistant_questions"] == 5
+    assert info["subscription"]["assistant_questions"] == 30      # demo user is on Plus
+    assert info["limits"]["limit"] == 30
 
 
 def test_revoke_removes_wishes_pending_categories(client):
@@ -287,6 +288,7 @@ def test_assistant_save_uses_same_capped_rule(client):
 
 
 def test_free_plan_chat_quota_renews_next_month(client):
+    assert client.post("/api/demo/subscription", json={"plan": "basic"}).status_code == 200
     for _ in range(5):
         assert client.post("/api/chat", json={"message": "كم عليّ هالشهر؟"}).status_code == 200
     assert client.post("/api/chat", json={"message": "كم عليّ هالشهر؟"}).status_code == 429
