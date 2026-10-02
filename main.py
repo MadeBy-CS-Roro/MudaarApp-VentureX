@@ -10,7 +10,7 @@ from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -193,3 +193,7 @@ if STATIC.exists():
     @app.get("/")
     def index():
         return FileResponse(STATIC / "index.html")
+else:
+    @app.get("/", include_in_schema=False)
+    def api_index():
+        return RedirectResponse(url="/docs")
