@@ -17,7 +17,7 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 
 - Publishing must start the ASGI server: `python -m uvicorn main:app --host 0.0.0.0 --port 5000`. Running `python main.py` alone only imports the app and exits.
 - Publishing settings take effect only after republishing.
-- The current publishing target is Autoscale. The local SQLite database is suitable for a resettable demo, not durable published user data: the published filesystem is not persistent. Do not migrate the database or change deployment type without approval.
+- The user requested Reserved VM for a single always-on demo instance. SQLite is still not durable across republishing; do not migrate the database or change deployment type without approval.
 
 ## Configuration
 
@@ -51,7 +51,7 @@ Contact form submissions are stored locally and rate limited. Public email/Whats
 ## Login and payments (latest)
 - Passwordless login: `POST /api/auth/signup`, `/api/auth/login`, `/api/auth/verify` (phone + 6-digit code).
   Demo mode returns `demo_code` and shows it on screen. Production returns 501 until an SMS provider is set.
-- Quick demo login as Noura: `POST /api/auth/demo` (button on the welcome screen). Demo phone: 0500000123.
+- Quick demo login as Noura: `POST /api/auth/demo` creates a private guest copy each time. Its phone hash stays NULL. Existing browser tokens return to the same copy until logout or expiry. Startup and hourly cleanup delete flagged guests older than 24 hours, never phone-registered accounts.
 - All `/api` routes need the token, except health, categories, contact and auth.
 - `POST /api/consent` connects the bank for the logged-in user.
 - Pay all: `GET /api/payments/due`, `POST /api/payments/pay` (demo only, simulated bank approval), `PATCH /api/plans/{id}` `{pay_mode}`.

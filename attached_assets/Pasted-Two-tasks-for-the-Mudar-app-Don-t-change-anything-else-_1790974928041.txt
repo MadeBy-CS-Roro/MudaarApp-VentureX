@@ -1,0 +1,51 @@
+Two tasks for the مُدار (Mudar) app. Don't change anything else: no design, text, or calculation changes.
+
+==================================================
+1. QUICK DEMO LOGIN: GIVE EACH VISITOR THEIR OWN COPY
+==================================================
+Problem: POST /api/auth/demo ("دخول سريع بحساب نورة") logs everyone into the SAME user
+(security.hash_id(DEMO_USER)). If two judges use it at the same time, one judge's actions
+(pay all, skip to next month, adding a bank) appear for the other.
+
+Change /api/auth/demo in main.py so every call creates a NEW private demo user:
+- user_hash = security.hash_id("demo-guest:" + uuid4().hex)
+- display_name "نورة", phone_last3 "123", email "noura@example.com"
+- phone_hash stays NULL (there's a UNIQUE index on phone_hash, so don't reuse Noura's phone hash)
+- then call service.connect_bank(con, user_hash, "demo1") so they get Noura's full demo data
+  (180 left to spend, Tamara before payday, Tabby ending, etc.)
+- return auth.session(con, user) exactly as now (token, name, bank_connected=true)
+
+Keep it demo-mode only (404 in production) and keep the existing rate limit on this route.
+The token is saved in the browser, so a visitor comes back to their own copy until they log out.
+"ابدأ الديمو من جديد" must reset only that visitor's copy (it already uses the logged-in user).
+
+Cleanup: on startup and once per hour, delete demo guest users older than 24 hours together
+with all their rows (consents, transactions, manual_expenses, plans, wishlist, demo_state,
+category_overrides, pending_actions, chat_usage, cycle_payments, savings_deposits,
+plan_settlements, user_preferences). To know which users are guests, add a column
+users.is_demo_guest INTEGER DEFAULT 0 through the existing migrate() in db.py, and set it to 1
+for these users. Never delete users who signed up with a phone number.
+
+Tests: add tests that
+- two calls to /api/auth/demo return different users who can't see each other's wishlist or payments
+- each one starts with available = 180
+- cleanup removes a guest older than 24 hours and keeps phone-registered users
+Update the existing quick-login tests if needed. All tests must pass: python -m pytest -q
+
+==================================================
+2. PREPARE THE PUBLIC DEPLOYMENT
+==================================================
+- Deployment type: Reserved VM (one always-on instance, so the SQLite demo data stays consistent).
+  Run command: python -m uvicorn main:app --host 0.0.0.0 --port 5000
+- Deployment secrets must include HMAC_KEY and SIGNING_SECRET (and ANTHROPIC_API_KEY if set).
+- Do NOT set MAWID_ENV=production or DEMO_MODE=false. The demo needs demo mode.
+- Do NOT set MUDAR_ALLOW_ANON on the deployment. It's only for tests.
+- Bump the service worker cache name in static/sw.js so phones load the newest files.
+- After deploying, open the public .replit.app link on a phone-sized screen and check:
+  1. the opening animation plays, then the welcome screen
+  2. "دخول سريع بحساب نورة" opens the home page with 180 left to spend
+  3. a second browser (private window) with quick login gets its own separate copy
+  4. حسابي ← اللغة switches to English and back
+  5. sign up with any number shows the code on screen and works
+
+When done, give me the public link and list anything you changed.

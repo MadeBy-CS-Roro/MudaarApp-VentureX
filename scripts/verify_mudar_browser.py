@@ -206,6 +206,41 @@ async def verify(debug_url, app_url, plans_only=False):
         assert not b.errors, b.errors
         print("PASS: English/Arabic direction, reload persistence, English chat, phone/desktop layouts")
 
+        # A second browser context has its own cookies and localStorage.
+        with httpx.Client() as client:
+            browser_ws = client.get(debug_url + "/json/version").json()["webSocketDebuggerUrl"]
+        async with websockets.connect(browser_ws, max_size=10_000_000) as root_ws:
+            root = Browser(root_ws)
+            context = await root.call("Target.createBrowserContext")
+            try:
+                target = await root.call("Target.createTarget", {
+                    "url": app_url, "browserContextId": context["browserContextId"]})
+                with httpx.Client() as client:
+                    tabs = client.get(debug_url + "/json/list").json()
+                tab = next(t for t in tabs if t["id"] == target["targetId"])
+                async with websockets.connect(tab["webSocketDebuggerUrl"], max_size=10_000_000) as second_ws:
+                    second = Browser(second_ws)
+                    await second.call("Runtime.enable")
+                    await second.call("Page.enable")
+                    await second.call("Emulation.setDeviceMetricsOverride", {
+                        "width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": True})
+                    await second.wait("!!document.querySelector('[data-go=demo]') && !document.querySelector('.splash')")
+                    await second.click("[data-go=demo]")
+                    await second.wait("!!document.querySelector('.ring-center')")
+                    assert (await second.api("/api/summary"))["available"] == 180
+                    assert (await second.api("/api/payments/due"))["payable_total"] == 600
+                    assert (await b.api("/api/payments/due"))["payable_total"] == 0
+                    assert not any(w["method"].startswith("loan:")
+                                   for w in (await second.api("/api/wishlist"))["items"])
+                    await second.call("Page.reload")
+                    await second.wait("!!document.querySelector('.ring-center') && !document.querySelector('.splash')")
+                    assert (await second.api("/api/payments/due"))["payable_total"] == 600
+                    assert not second.errors, second.errors
+                    await second.screenshot("/tmp/mudar-private-visitor.png")
+            finally:
+                await root.call("Target.disposeBrowserContext", {"browserContextId": context["browserContextId"]})
+        print("PASS: independent private-browser quick login, payment/wishlist isolation and token persistence")
+
 
 if __name__ == "__main__":
     from verify_phone_browser import main

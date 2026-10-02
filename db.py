@@ -187,7 +187,8 @@ def _columns(con, table):
 def migrate(con):
     con.executescript(EXTRA_SCHEMA)
     for table, column, ddl in (("users", "phone_hash", "TEXT"), ("users", "phone_last3", "TEXT"),
-                               ("users", "email", "TEXT"), ("plans", "pay_mode", "TEXT"),
+                               ("users", "email", "TEXT"), ("users", "is_demo_guest", "INTEGER NOT NULL DEFAULT 0"),
+                               ("plans", "pay_mode", "TEXT"),
                                ("transactions", "bank_id", "TEXT"), ("plans", "remind", "INTEGER NOT NULL DEFAULT 1"),
                                ("plans", "cancel_planned", "INTEGER NOT NULL DEFAULT 0"), ("plans", "cancelled_at", "TEXT")):
         if column not in _columns(con, table):
@@ -241,6 +242,30 @@ def init():
         con.execute("INSERT OR IGNORE INTO user_preferences(user_id,plan) "
                     "SELECT id,CASE WHEN EXISTS(SELECT 1 FROM demo_state WHERE user_id=users.id) "
                     "THEN 'plus' ELSE 'basic' END FROM users")
+
+
+def cleanup_demo_guests() -> int:
+    """Remove expired temporary personas, never phone-registered accounts."""
+    import assistant
+
+    with tx() as con:
+        guests = con.execute("""
+            SELECT id, user_hash FROM users
+            WHERE is_demo_guest=1 AND phone_hash IS NULL
+              AND datetime(created_at)<datetime('now','-24 hours')
+        """).fetchall()
+        for guest in guests:
+            for table in ("savings_deposits", "plan_settlements", "cycle_payments",
+                          "consents", "transactions", "manual_expenses", "plans", "wishlist",
+                          "demo_state", "category_overrides", "pending_actions", "chat_usage",
+                          "user_preferences"):
+                con.execute(f"DELETE FROM {table} WHERE user_id=?", (guest["id"],))
+            con.execute("DELETE FROM audit_log WHERE user_hash=?", (guest["user_hash"],))
+            con.execute("DELETE FROM users WHERE id=?", (guest["id"],))
+            # SQLite may reuse a removed row ID; do not inherit old chat context.
+            assistant._history.pop(guest["id"], None)
+            assistant._last.pop(guest["id"], None)
+        return len(guests)
 
 
 def audit(con, user_hash: str, action: str, detail: dict | None = None):

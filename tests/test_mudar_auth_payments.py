@@ -125,7 +125,8 @@ def test_pay_mode_toggle_and_production(app_client, monkeypatch):
     assert r["payable"] == [] and any(i["id"] == "tamara" for i in r["auto"])
     app_client.patch("/api/plans/tamara", json={"pay_mode": "manual"}, headers=hd)
     monkeypatch.setattr(main, "DEMO_MODE", False)
-    token = main.security.sign_token({"sub": main.security.hash_id(main.DEMO_USER), "mode": "production"})
+    original = main.security.verify_token(hd["Authorization"].removeprefix("Bearer "))
+    token = main.security.sign_token({"sub": original["sub"], "mode": "production"})
     monkeypatch.setattr(main, "PRODUCTION_MODE", True)
     r = app_client.post("/api/payments/pay", json={"item_ids": ["tamara"]}, headers=h(token))
     assert r.status_code == 501

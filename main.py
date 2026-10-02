@@ -4,12 +4,15 @@ Docs at /docs.  Put your front end in ./static/index.html to serve it from /.
 """
 from __future__ import annotations
 import os
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 from datetime import date as Date
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -72,10 +75,29 @@ def _allowed_origins() -> list[str]:
     return list(dict.fromkeys(origins))
 
 
+async def _hourly_guest_cleanup():
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            await asyncio.to_thread(db.cleanup_demo_guests)
+        except Exception:
+            logging.getLogger(__name__).exception("Demo guest cleanup failed")
+
+
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
-    yield
+    cleanup_task = None
+    if DEMO_MODE:
+        await asyncio.to_thread(db.cleanup_demo_guests)
+        cleanup_task = asyncio.create_task(_hourly_guest_cleanup())
+    try:
+        yield
+    finally:
+        if cleanup_task is not None:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
 
 app = FastAPI(title="Mudar API", version="0.1", lifespan=lifespan)
 app.add_middleware(
@@ -297,11 +319,12 @@ def auth_demo(request: Request):
         raise HTTPException(404, "المسار غير متاح.")
     if not limiter.allow(request.client.host if request.client else "anon"):
         raise HTTPException(429, "طلبات كثيرة، جرب بعد دقيقة.")
-    user_hash = security.hash_id(DEMO_USER)
+    user_hash = security.hash_id("demo-guest:" + uuid4().hex)
     with db.tx() as con:
-        user = auth.ensure_demo_user(con, user_hash)
-        if not con.execute("SELECT 1 FROM consents WHERE user_id=? AND status='active'", (user["id"],)).fetchone():
-            service.connect_bank(con, user_hash, "demo1")
+        con.execute("INSERT INTO users(user_hash,display_name,phone_last3,email,is_demo_guest) "
+                    "VALUES (?,'نورة','123','noura@example.com',1)", (user_hash,))
+        service.connect_bank(con, user_hash, "demo1")
+        user = con.execute("SELECT * FROM users WHERE user_hash=?", (user_hash,)).fetchone()
         return auth.session(con, user)
 
 
