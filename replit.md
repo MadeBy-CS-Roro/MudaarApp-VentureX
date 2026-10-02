@@ -10,6 +10,7 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 - Interactive API docs: `/docs`; health check: `/api/health`.
 - Dependencies are listed in `requirements.txt`.
 - Tests: `python -m pytest -q`. Tests use a separate temporary SQLite database.
+- Post-merge setup: `scripts/post-merge.sh` installs dependencies and runs tests non-interactively; Replit then reconciles workflows. It does not reset or migrate the runtime database.
 
 ## Configuration
 

@@ -1,0 +1,1 @@
+- [Python merge environment](python-merge-environment.md) — merge hooks do not inherit interactive pip target settings; use project-local packages.
