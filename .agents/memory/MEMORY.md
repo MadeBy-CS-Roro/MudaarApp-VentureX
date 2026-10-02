@@ -1,1 +1,2 @@
 - [Python merge environment](python-merge-environment.md) — merge hooks do not inherit interactive pip target settings; use project-local packages.
+- [Uploaded frontend scope](frontend-scope.md) — user requested frontend-only integration linked to the current backend, not replacement from the ZIP.

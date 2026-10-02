@@ -246,7 +246,20 @@ def test_production_requires_exact_https_cors_origins():
     assert "exact HTTPS origins" in wildcard.stderr
 
 
-def test_root_redirects_to_docs(client):
+def test_root_serves_frontend(client):
     response = client.get("/", follow_redirects=False)
-    assert response.status_code == 307
-    assert response.headers["location"] == "/docs"
+    assert response.status_code == 200
+    assert 'text/html' in response.headers["content-type"]
+    assert '<html lang="ar" dir="rtl">' in response.text
+    assert 'id="p-overview"' in response.text
+
+
+def test_frontend_assets_and_api_docs(client):
+    manifest = client.get("/static/manifest.json")
+    assert manifest.status_code == 200
+    assert manifest.json()["start_url"] == "/"
+    for icon in manifest.json()["icons"]:
+        response = client.get(icon["src"])
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+    assert client.get("/docs").status_code == 200

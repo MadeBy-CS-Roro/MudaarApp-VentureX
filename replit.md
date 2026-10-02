@@ -6,7 +6,7 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 
 - Use Replit's **Run** button to start the **Mawid backend** workflow.
 - Command: `python -m uvicorn main:app --host 0.0.0.0 --port 5000`
-- The preview root redirects to `/docs` because no frontend was imported.
+- The preview root serves the uploaded Arabic RTL frontend from `static/index.html`, linked to the existing API through relative same-origin URLs.
 - Interactive API docs: `/docs`; health check: `/api/health`.
 - Dependencies are listed in `requirements.txt`.
 - Tests: `python -m pytest -q`. Tests use a separate temporary SQLite database.
@@ -23,5 +23,10 @@ This imported project is a Python 3.11 FastAPI backend using SQLite. Keep its ex
 
 ## Trying the demo
 
-Call `POST /api/consent` with `{"bank_id":"demo1"}` to initialize demo data, then try `/api/summary`, `/api/plans`, `/api/scenarios`, and `/api/chat` in the docs.
+Open the preview and use the demo bank onboarding when prompted. You can also call `POST /api/consent` with `{"bank_id":"demo1"}` to initialize demo data, then try `/api/summary`, `/api/plans`, `/api/scenarios`, and `/api/chat` in the docs.
 Consent creation and `/api/demo/reset` reset the demo data. No live bank connection is configured.
+
+## Frontend scope
+
+Only the uploaded frontend and its icons/manifest were integrated; uploaded backend files were not copied over existing fixes.
+Expense and obligation views use the existing summary API. Manual expense entry and payment-plan creation/deletion are unavailable in the current backend and must not be presented as working.
