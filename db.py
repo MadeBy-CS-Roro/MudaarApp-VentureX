@@ -161,6 +161,15 @@ CREATE TABLE IF NOT EXISTS otp_codes (
   attempts INTEGER NOT NULL DEFAULT 0,
   locked_until TEXT
 );
+CREATE TABLE IF NOT EXISTS score_events (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL,
+  points INTEGER NOT NULL,
+  ref TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(user_id, ref)
+);
 CREATE TABLE IF NOT EXISTS cycle_payments (
   user_id INTEGER NOT NULL REFERENCES users(id),
   plan_id TEXT NOT NULL,
@@ -190,7 +199,9 @@ def migrate(con):
                                ("users", "email", "TEXT"), ("plans", "pay_mode", "TEXT"),
                                ("transactions", "bank_id", "TEXT"), ("plans", "remind", "INTEGER NOT NULL DEFAULT 1"),
                                ("plans", "cancel_planned", "INTEGER NOT NULL DEFAULT 0"), ("plans", "cancelled_at", "TEXT"),
-                               ("users", "is_demo_guest", "INTEGER NOT NULL DEFAULT 0")):
+                               ("users", "is_demo_guest", "INTEGER NOT NULL DEFAULT 0"),
+                               ("users", "leaderboard_opt_in", "INTEGER NOT NULL DEFAULT 0"),
+                               ("users", "leaderboard_name", "TEXT"), ("wishlist", "kind", "TEXT NOT NULL DEFAULT 'item'")):
         if column not in _columns(con, table):
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone_hash) WHERE phone_hash IS NOT NULL")

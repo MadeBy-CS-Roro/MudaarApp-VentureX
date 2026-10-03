@@ -86,6 +86,9 @@ def pay(con, user_id: int, item_ids: list[str], demo_mode: bool) -> dict:
                     "VALUES (?,?,?,?,?,'mawid_demo_pay')",
                     (user_id, pid, s.current, item["amount"], s.extra["today"].isoformat()))
         paid.append({"id": pid, "name": item["name"], "amount": item["amount"]})
+        if item["days_until"] > 0:
+            import score
+            score.award(con, user_id, "paid_early", 10, f"paid:{pid}:{s.current}")
     return {"ok": True, "paid": paid, "total": round(sum(p["amount"] for p in paid), 2), "demo": True}
 
 
@@ -118,4 +121,6 @@ def mark_cancelled(con, user_id: int, plan_id: str) -> dict:
     until = s.current if charged else s.current - 1
     con.execute("UPDATE plans SET active_until=?, cancelled_at=?, cancel_planned=0 WHERE user_id=? AND id=?",
                 (until, s.extra["today"].isoformat(), user_id, plan_id))
-    return {"ok": True, "charged_this_month": charged, "name": row["name"], "saves": row["amount"]}
+    import score
+    score.award(con, user_id, "sub_cancelled", 15, f"cancel:{plan_id}")
+    return {"ok": True, "charged_this_month": charged, "name": row["name"], "saves": row["amount"], "points": 15}

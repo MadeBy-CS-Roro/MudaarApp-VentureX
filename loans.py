@@ -105,7 +105,8 @@ def compare(s: E.Snapshot, price: float, debt_monthly: float) -> dict:
         feasible = [o for o in options if o["dbr_ok"] and o["earliest"] is not None]
         if feasible:
             # Shortest feasible tenor at the earliest start = least profit paid.
-            default = min(feasible, key=lambda o: (o["earliest"], o["total_cost"]))
+            # Shortest (cheapest) term you can start within a month; otherwise the soonest one.
+            default = min(feasible, key=lambda o: (0 if o["earliest"] <= 1 else 1, o["total_cost"], o["earliest"]))
             reason = (f"أقصر مدة تناسب ميزانيتك ({o_months(default['months'])})، "
                       f"وتدفع {default['extra_cost']:,.0f} ر.س فوق المبلغ.")
         else:

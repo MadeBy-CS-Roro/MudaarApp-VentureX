@@ -206,6 +206,29 @@ async def verify(debug_url, app_url, plans_only=False):
         assert not b.errors, b.errors
         print("PASS: English/Arabic direction, reload persistence, English chat, phone/desktop layouts")
 
+        await b.call("Emulation.setDeviceMetricsOverride", {
+            "width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": True})
+        await route("home", "[data-act=score-why]")
+        score = await b.api("/api/score")
+        assert 0 <= score["score"] <= 100
+        await b.click("[data-act=score-why]")
+        await b.wait("document.querySelector('#layer')?.textContent.includes('سداد الالتزامات بوقتها')")
+        await b.screenshot("/tmp/mudar-score.png")
+        await b.js("closeSheet()")
+        await route("standings", "#lb-opt")
+        assert not (await b.api("/api/leaderboard"))["opt_in"]
+        await b.fill("#lb-name", "زائر اختبار مستقل")
+        await b.click("#lb-opt")
+        await b.click("[data-act=lb-save]")
+        await b.wait("document.querySelector('#view').textContent.includes('زائر اختبار مستقل')")
+        assert (await b.api("/api/leaderboard"))["opt_in"]
+        await b.screenshot("/tmp/mudar-standings.png")
+        await b.click("#lb-opt")
+        await b.click("[data-act=lb-save]")
+        await b.wait("api('/api/leaderboard').then(v=>!v.opt_in)")
+        assert not b.errors, b.errors
+        print("PASS: phone score breakdown, rankings, nickname opt-in and opt-out")
+
         # A second browser context has its own cookies and localStorage.
         with httpx.Client() as client:
             browser_ws = client.get(debug_url + "/json/version").json()["webSocketDebuggerUrl"]

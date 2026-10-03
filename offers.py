@@ -40,9 +40,10 @@ def _bnpl(s: E.Snapshot, price: float) -> tuple[list[dict], str | None]:
 
 
 def _rank(row: dict) -> tuple:
-    return (0 if row["ok"] else 1,
-            row["earliest"] if row["earliest"] is not None else float("inf"),
-            row["total_cost"], row["monthly"])
+    """Cheapest option you can start within a month wins. Starting now is not worth paying
+    years of extra profit for, so a short wait beats a long, expensive loan."""
+    e = row["earliest"] if row["earliest"] is not None else float("inf")
+    return (0 if e <= 1 else 1, row["total_cost"], e, row["monthly"])
 
 
 def compare(s: E.Snapshot, price: float, target_months: int | None = None, debt_monthly: float = 0.0) -> dict:

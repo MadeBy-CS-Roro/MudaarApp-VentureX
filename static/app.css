@@ -368,3 +368,11 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 [dir="ltr"] .msg.user { align-self: flex-end; }
 [dir="ltr"] .msg .tools { text-align: left; }
 [dir="ltr"] body { letter-spacing: 0; }
+
+.slide-top { display: flex; justify-content: space-between; align-items: center; margin: -6px 0 0; }
+.slide-top .square-btn { width: 40px; height: 40px; color: var(--gold); text-decoration: none; }
+.payees { display: flex; flex-wrap: wrap; gap: 8px; }
+.kind-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.kind-chips button { border: 1px solid var(--line); background: transparent; color: var(--soft); border-radius: 12px; padding: 7px 11px; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+.kind-chips button .icon { width: 16px; height: 16px; }
+.kind-chips button[aria-pressed="true"] { background: var(--violet); border-color: var(--violet); color: #fff; }

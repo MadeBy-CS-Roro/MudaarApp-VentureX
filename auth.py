@@ -178,7 +178,7 @@ def change_phone_verify(con, user_id: int, phone_raw: str, code: str) -> dict:
 # ---------- quick demo: every visitor gets a private copy ----------
 GUEST_TTL_HOURS = 24
 GUEST_TABLES = ("consents", "transactions", "manual_expenses", "plans", "wishlist", "demo_state", "category_overrides",
-                "pending_actions", "chat_usage", "cycle_payments", "savings_deposits", "plan_settlements", "user_preferences")
+                "pending_actions", "chat_usage", "cycle_payments", "savings_deposits", "plan_settlements", "user_preferences", "score_events")
 
 
 def new_demo_guest(con, connect_bank) -> object:

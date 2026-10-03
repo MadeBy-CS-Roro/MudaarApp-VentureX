@@ -222,3 +222,56 @@ def test_assistant_adds_commitment_up_to_the_limit(app_client):
     assert app_client.post(f"/api/chat/actions/{r['actions'][0]['id']}/confirm", headers=hd).status_code == 200
     r = app_client.post("/api/chat", json={"message": "ضيف التزام سباحة 100 يوم 9"}, headers=hd).json()
     assert not r["actions"] and "5" in r["reply"]                           # the 6th is refused with the limit
+
+
+def test_score_is_fair_and_explained(app_client):
+    hd = demo(app_client)
+    s = app_client.get("/api/score", headers=hd).json()
+    assert 0 <= s["score"] <= 100 and len(s["parts"]) == 6
+    assert sum(p["max"] for p in s["parts"]) == 100
+    parts = {p["id"]: p for p in s["parts"]}
+    assert parts["on_time"]["points"] == 25                      # nothing late
+    assert parts["essentials"]["points"] < 15 and parts["essentials"]["tip"]   # 87% vs 70% target
+    # fairness: same behaviour on a much bigger salary scores the same (score uses ratios, not amounts)
+    with main.db.tx() as con:
+        uid = con.execute("SELECT id FROM users WHERE is_demo_guest=1").fetchone()["id"]
+        con.execute("UPDATE transactions SET amount=amount*4 WHERE user_id=?", (uid,))
+        con.execute("UPDATE plans SET amount=amount*4 WHERE user_id=?", (uid,))
+    assert app_client.get("/api/score", headers=hd).json()["score"] == s["score"]
+
+
+def test_good_actions_earn_points(app_client):
+    hd = demo(app_client)
+    before = app_client.get("/api/score", headers=hd).json()["points"]
+    app_client.post("/api/payments/pay", json={"item_ids": ["tamara"]}, headers=hd)          # paid before due: +10
+    app_client.post("/api/plans/tabby/confirm", json={}, headers=hd)                          # +2
+    app_client.post("/api/plans/tabby/confirm", json={}, headers=hd)                          # no double points
+    after = app_client.get("/api/score", headers=hd).json()
+    assert after["points"] - before >= 12
+    assert {e["label"] for e in after["events"]} >= {"دفعت التزام قبل موعده", "أكدت التزام"}
+
+
+def test_standings_are_private_by_default(app_client):
+    hd = demo(app_client)
+    lb = app_client.get("/api/leaderboard", headers=hd).json()
+    assert lb["opt_in"] is False and lb["total"] >= 15 and any(r["me"] for r in lb["rows"])
+    assert all(set(r) == {"name", "score", "me", "rank"} for r in lb["rows"])       # no money data at all
+    assert app_client.put("/api/leaderboard/me", json={"opt_in": True}, headers=hd).status_code == 422
+    lb = app_client.put("/api/leaderboard/me", json={"opt_in": True, "nickname": "نجمة"}, headers=hd).json()
+    assert lb["opt_in"] and next(r for r in lb["rows"] if r["me"])["name"] == "نجمة"
+    other = demo(app_client)
+    names = [r["name"] for r in app_client.get("/api/leaderboard", headers=other).json()["rows"]]
+    assert "نجمة" in names
+
+
+def test_obligations_link_to_each_provider(app_client):
+    hd = demo(app_client)
+    o = app_client.get("/api/obligations", headers=hd).json()
+    urls = {p["url"] for p in o["payees"]}
+    assert {"https://tamara.co", "https://tabby.ai", "https://www.ejar.sa", "https://www.se.com.sa"} <= urls
+
+
+def test_wishlist_keeps_plan_type(app_client):
+    hd = demo(app_client)
+    r = app_client.post("/api/wishlist", json={"name": "سفرة الرياض", "price": 6000, "method": "save", "kind": "trip"}, headers=hd)
+    assert r.status_code == 200 and next(i for i in r.json()["items"] if i["name"] == "سفرة الرياض")["kind"] == "trip"

@@ -46,6 +46,7 @@ class UpdatePlanIn(Input):
 
 class WishIn(Input):
     name: str = Field(min_length=1, max_length=60)
+    kind: Literal["item", "trip", "event", "education", "other"] = "item"
     price: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
     method: str = Field(pattern=r"^(cash|bnpl3|bnpl4|bnpl6|fin12|save|loan:[a-z_]+:\d{1,2})$")
 

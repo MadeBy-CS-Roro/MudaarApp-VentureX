@@ -134,7 +134,7 @@ def connect_bank(con, user_hash: str, bank_id: str) -> dict:
     """First connection (or demo reset): fresh start with this one bank."""
     con.execute("INSERT OR IGNORE INTO users(user_hash, display_name) VALUES (?, ?)", (user_hash, "نورة"))
     user_id = con.execute("SELECT id FROM users WHERE user_hash=?", (user_hash,)).fetchone()["id"]
-    for table in ("savings_deposits", "plan_settlements", "user_preferences", "transactions", "manual_expenses", "plans", "wishlist", "demo_state", "category_overrides", "pending_actions", "chat_usage", "cycle_payments"):
+    for table in ("savings_deposits", "plan_settlements", "user_preferences", "transactions", "manual_expenses", "plans", "wishlist", "demo_state", "category_overrides", "pending_actions", "chat_usage", "cycle_payments", "score_events"):
         con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
     con.execute("UPDATE consents SET status='revoked' WHERE user_id=?", (user_id,))
     consent_id, expires = _new_consent(con, user_id, bank_id)
@@ -194,7 +194,7 @@ def banks(con, user_id: int) -> list[dict]:
 
 def revoke(con, user_id: int):
     con.execute("UPDATE consents SET status='revoked' WHERE user_id=?", (user_id,))
-    for table in ("savings_deposits", "plan_settlements", "user_preferences", "transactions", "manual_expenses", "plans", "demo_state", "wishlist", "category_overrides", "pending_actions", "chat_usage", "cycle_payments"):
+    for table in ("savings_deposits", "plan_settlements", "user_preferences", "transactions", "manual_expenses", "plans", "demo_state", "wishlist", "category_overrides", "pending_actions", "chat_usage", "cycle_payments", "score_events"):
         con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
 
 
@@ -408,11 +408,12 @@ def method_label(method: str) -> str:
     return METHOD_LABELS.get(method, method)
 
 
-def add_wish(con, user_id: int, name: str, price: float, method: str) -> dict:
+def add_wish(con, user_id: int, name: str, price: float, method: str, kind: str = "item") -> dict:
     exists = con.execute("SELECT id FROM wishlist WHERE user_id=? AND name=? AND price=?", (user_id, name, price)).fetchone()
     if not exists:
-        con.execute("INSERT INTO wishlist(user_id,name,price,method) VALUES (?,?,?,?)", (user_id, name, price, method))
-    return {"added": not exists, "name": name, "price": price, "method": method}
+        con.execute("INSERT INTO wishlist(user_id,name,price,method,kind) VALUES (?,?,?,?,?)",
+                    (user_id, name, price, method, kind))
+    return {"added": not exists, "name": name, "price": price, "method": method, "kind": kind}
 
 
 def update_wish(con, user_id: int, item_id: int, price: float | None = None, method: str | None = None) -> bool:
@@ -428,7 +429,14 @@ def update_wish(con, user_id: int, item_id: int, price: float | None = None, met
 
 # ---------- demo: skip to next month ----------
 def next_month(con, user_id: int) -> dict:
+    import score as _score
+    closing = _score.compute(con, user_id)
+    closing_summary = summary(con, user_id)
     before = snapshot(con, user_id)
+    _score.award(con, user_id, "month_closed", closing["score"], f"month:{before.current}")
+    cap = budget.targets(con, user_id)["personal_pct"] / 100 * (before.profile.salary or 0)
+    if closing_summary["spent"] <= cap and closing_summary["available"] >= 0:
+        _score.award(con, user_id, "under_limit", 20, f"limit:{before.current}")
     leftover = E.saving_amount(before, 0)
     was_ok = {w["id"]: w["status"]["ok"] for w in wishlist(con, user_id, internal=True)}
     sd = before.profile.salary_day
@@ -504,8 +512,25 @@ def set_category(con, user_id: int, merchant: str, category: str) -> None:
     con.execute("UPDATE transactions SET category=? WHERE user_id=? AND merchant=?", (category, user_id, merchant))
 
 
+PROVIDER_SITES = {
+    "SAUDI ELECTRICITY": ("موقع الشركة السعودية للكهرباء", "https://www.se.com.sa"),
+    "NATIONAL WATER": ("موقع شركة المياه الوطنية", "https://www.nwc.com.sa"),
+    "STC": ("موقع STC", "https://www.stc.com.sa"), "MOBILY": ("موقع موبايلي", "https://www.mobily.com.sa"),
+    "ZAIN": ("موقع زين", "https://sa.zain.com"), "EJAR": ("منصة إيجار", "https://www.ejar.sa"),
+    "TAMARA": ("موقع تمارا", "https://tamara.co"), "TABBY": ("موقع تابي", "https://tabby.ai"),
+    "NETFLIX": ("موقع نتفليكس", "https://www.netflix.com"), "SHAHID": ("موقع شاهد", "https://shahid.mbc.net"),
+    "SPOTIFY": ("موقع سبوتيفاي", "https://www.spotify.com"), "DISNEY": ("موقع ديزني+", "https://www.disneyplus.com"),
+    "ANGHAMI": ("موقع أنغامي", "https://www.anghami.com"),
+}
+
 BILL_NAMES = {"SAUDI ELECTRICITY": "فاتورة الكهرباء", "NATIONAL WATER": "فاتورة المياه",
               "STC": "باقة STC", "MOBILY": "باقة موبايلي", "ZAIN": "باقة زين"}
+
+
+def _site(merchant: str) -> dict | None:
+    key = (merchant or "").upper()
+    hit = PROVIDER_SITES.get(key)
+    return {"label": hit[0], "url": hit[1]} if hit else None
 
 
 def obligations_view(con, user_id: int) -> dict:
@@ -524,6 +549,7 @@ def obligations_view(con, user_id: int) -> dict:
         items.append({**p, "type": "installment" if p["kind"] in ("bnpl", "loan") else p["kind"],
                       "in_formula": True, "due_date": due.isoformat(),
                       "pay_mode": payments.mode_of(row) if row else "manual",
+                      "site": _site(row["merchant"] if row else ""),
                       "status": "paid" if due < s.extra["today"] or paid_now else "upcoming"})
     previous = []
     for p in plans_view(con, user_id):
@@ -553,14 +579,20 @@ def obligations_view(con, user_id: int) -> dict:
                       "type": "bill", "kind": "bill", "amount": x["amount"], "day": x["date"].day,
                       "due_date": due.isoformat(), "status": "paid" if bill["paid_now"] else
                       "late" if due < s.extra["today"] else "upcoming", "remaining": None, "total": None,
-                      "action": None, "confirmed": True, "in_formula": False, "source": "bank", "progress": None})
+                      "action": None, "confirmed": True, "in_formula": False, "source": "bank", "progress": None,
+                      "site": _site(merchant)})
     # The plan limit counts commitments only (installments, loans, rent, subscriptions, manual ones).
     # Bills are part of living costs and are always shown.
     commitments = sorted([p for p in items if p["type"] != "bill"], key=lambda p: (-p["amount"], p["id"]))
     bills = [p for p in items if p["type"] == "bill"]
     visibility = subscriptions.cap(con, user_id, commitments)
     visibility["items"] = visibility["items"] + bills
+    payees = []
+    for p in visibility["items"]:
+        if p.get("site") and p["site"]["url"] not in {x["url"] for x in payees}:
+            payees.append({"name": p["name"], **p["site"]})
     return {"total": current_summary["obligations_total"], "plans_total": E.obligations(s, s.current),
+            "payees": payees,
             "essentials_total": s.profile.essentials, "essentials_by_category": s.extra["essentials_by_category"],
             "bills_total": sum(p["amount"] for p in items if p["type"] == "bill"),
             **visibility, "active_items": visibility["items"], "items": visibility["items"] + previous,

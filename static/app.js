@@ -48,7 +48,12 @@ const ICON = {
   card: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/>',
   bill: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
   wallet: '<path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M21 8h-5a3 3 0 0 0 0 6h5z"/>',
-  bank: '<path d="m3 9 9-5 9 5M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>'
+  bank: '<path d="m3 9 9-5 9 5M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>',
+  trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5a2 2 0 0 0 2 4h1M16 6h3a2 2 0 0 1-2 4h-1M12 13v4M9 21h6M10 17h4"/>',
+  plane: '<path d="M10 3.5a1.5 1.5 0 0 1 3 0V9l8 4v2l-8-2v4l2 2v1l-3.5-1-3.5 1v-1l2-2v-4l-8 2v-2l8-4z"/>',
+  gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v8h14v-8M12 8v12M12 8c-2-4-6-4-6-1s6 1 6 1zm0 0c2-4 6-4 6-1s-6 1-6 1z"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5M8 7h7"/>',
+  box: '<path d="m3 7 9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7M12 11v10"/>'
 };
 const ic = (name, cls = "icon") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name] || ""}</svg>`;
 
@@ -442,7 +447,7 @@ const TABS = [
   { id: "account", label: "حسابي", icon: "account" }
 ];
 const PAGES = { home: renderHome, expenses: renderExpenses, obligations: renderObligations, planner: renderPlanner,
-  account: renderAccount, wishlist: renderWishlist, subscriptions: renderSubscriptions };
+  account: renderAccount, wishlist: renderWishlist, subscriptions: renderSubscriptions, standings: renderStandings };
 
 async function startApp() {
   try {
@@ -508,7 +513,8 @@ function animateRings(root = document) {
 }
 
 async function renderHome() {
-  const [s, w] = await Promise.all([api("/api/summary"), wishState()]);
+  const [s, w, sc, lb] = await Promise.all([api("/api/summary"), wishState(), api("/api/score"), api("/api/leaderboard")]);
+  S._score = sc;
   const days = s.salary.days_left;
   topbar(`<div class="who"><span class="avatar">${esc(T(s.display_name || "م").trim().charAt(0))}</span>
       <div><b>هلا ${esc(s.display_name || "")}</b><small>${days <= 0 ? "الراتب اليوم" : `الراتب بعد ${counted(days, "days")}`}</small></div></div>
@@ -575,8 +581,8 @@ async function renderHome() {
   const featured = renew || ending;
   const otherAlerts = s.alerts.filter(a => a.type !== "before_salary" && a !== featured);
   $("#view").innerHTML = `
-    <div class="slider" id="slider">${slide1}${slide2}${slide3}</div>
-    <div class="dots" id="dots">${["باقي لك", "التزاماتك هالشهر", "المعيشة"].map((l, i) => `<button aria-label="${l}" data-slide="${i}" aria-current="${i === 0}"></button>`).join("")}</div>
+    <div class="slider" id="slider">${scoreSlide(sc, lb)}${slide1}${slide2}${slide3}</div>
+    <div class="dots" id="dots">${["تقييم إدارتك", "باقي لك", "التزاماتك هالشهر", "المعيشة"].map((l, i) => `<button aria-label="${l}" data-slide="${i}" aria-current="${i === 0}"></button>`).join("")}</div>
     <div class="grid-2">${card1}${card2}</div>
     ${otherAlerts.length ? `<section class="card tight">${alertsHtml(otherAlerts)}</section>` : ""}
     <a class="card tap" href="#obligations" style="display:block;text-decoration:none">
@@ -720,7 +726,7 @@ async function renderObligations() {
       ${x.cancel_planned ? `<div class="alert warn">${ic("alert")}<div>ناوي تلغيه؟ ألغه من موقع الجهة ${charged ? "قبل التجديد الجاي" : `قبل ${whenDays(d) === "بكرة" ? "بكرة" : `يوم ${x.day}`}`} عشان ما ينخصم مرة ثانية.</div></div>` : ""}
       <div class="foot">
         <label class="switch"><input type="checkbox" data-remind="${esc(x.id)}" ${x.remind ? "checked" : ""}>ذكّرني قبل التجديد</label>
-        <div class="btn-row">${action(x.action)}</div>
+        <div class="btn-row">${action(x.action)}${siteChip(x)}</div>
       </div>
       <div class="btn-row">
         <button class="btn ${x.cancel_planned ? "ghost" : "soft"} sm" data-intent="${esc(x.id)}" data-on="${x.cancel_planned ? 0 : 1}">${x.cancel_planned ? "تراجعت، بخليه" : "ناوي ألغيه"}</button>
@@ -749,7 +755,7 @@ async function renderObligations() {
       ${p.total ? `<div class="bar v"><span style="width:${p.progress ?? 0}%"></span></div>` : ""}
       <div class="foot">
         <label class="switch"><input type="checkbox" data-mode="${esc(p.id)}" ${p.pay_mode === "auto" ? "checked" : ""}>ينسحب تلقائي من البنك</label>
-        <div class="btn-row">${action(p.action)}
+        <div class="btn-row">${action(p.action)}${siteChip(p)}
           ${p.confirmed ? "" : `<button class="btn soft sm" data-confirm="${esc(p.id)}">أكّد</button>`}
           ${p.source === "manual" ? `<button class="x-btn" data-del-plan="${esc(p.id)}" aria-label="حذف">${ic("trash")}</button>` : ""}</div>
       </div>
@@ -770,9 +776,12 @@ async function renderObligations() {
       ${Object.entries(o.essentials_by_category || {}).map(([k, v]) => `<div class="row"><span>${esc(k)}</span><span class="r">${money(v)}</span></div>`).join("")}
       ${bills.length ? `<h2 style="font-size:15px;margin:16px 0 4px">الفواتير الشهرية</h2>
         ${bills.map(b => `<div class="row"><div class="l"><span class="ico t">${ic("bill")}</span><div><div class="t">${esc(b.name)}</div><div class="s">يوم ${b.day}</div></div></div>
-          <div style="text-align:left"><div class="r">${money(b.amount)}</div>${statusBadge(b)}</div></div>`).join("")}
+          <div style="text-align:left"><div class="r">${money(b.amount)}</div>${statusBadge(b)}${b.site ? `<div><a class="link-btn" style="font-size:12px" href="${esc(b.site.url)}" target="_blank" rel="noopener">${ic("ext", "icon")} ادفع</a></div>` : ""}</div></div>`).join("")}
         <p class="muted" style="margin:8px 0 0">الفواتير داخل متوسط المعيشة، ما نحسبها مرتين.</p>` : ""}
-    </section>`;
+    </section>
+    ${(o.payees || []).length ? `<section class="card"><h2>الجهات اللي تدفع لها</h2>
+      <p class="muted" style="margin-top:-6px">روابط المواقع الرسمية عشان تدفع أو تدير حسابك عندهم.</p>
+      <div class="payees">${o.payees.map(x => `<a class="chip" href="${esc(x.url)}" target="_blank" rel="noopener">${ic("ext")}${esc(x.name)}</a>`).join("")}</div></section>` : ""}`;
 
   const previous = o.previous_payments.length ? o.previous_payments.map(p => `<article class="card ob">
       <div class="top"><div class="l" style="display:flex;gap:12px;align-items:center"><span class="ico t">${ic("check")}</span>
@@ -826,6 +835,12 @@ function addPlanSheet() {
       closeSheet(); toast("انضاف الالتزام، و«تقدر تصرف» اتحدّث.", "good"); refresh();
     } catch (err) { handleError(err); }
   });
+}
+
+function siteChip(p) {
+  if (!p.site) return "";
+  if (p.action && p.action.url === p.site.url) return "";
+  return `<a class="chip" href="${esc(p.site.url)}" target="_blank" rel="noopener">${ic("ext")}${esc(p.site.label)}</a>`;
 }
 
 /* ---------- pay all (simulated open banking payment initiation) ---------- */
@@ -890,19 +905,30 @@ async function paySheet() {
 }
 
 /* ===================== PLANNER ===================== */
+const PLAN_KINDS = [
+  { id: "item", label: "شراء", icon: "box", hint: "مثال: جوال", quick: [["شوز", 500], ["جوال", 3000], ["لابتوب", 7000], ["أثاث", 15000]] },
+  { id: "trip", label: "سفرة", icon: "plane", hint: "مثال: سفرة دبي", quick: [["سفرة داخلية", 3000], ["سفرة دبي", 6000], ["سفرة أوروبا", 18000]] },
+  { id: "event", label: "مناسبة", icon: "gift", hint: "مثال: حفلة تخرج", quick: [["هدية", 800], ["حفلة تخرج", 5000], ["زواج", 40000]] },
+  { id: "education", label: "دراسة ودورات", icon: "book", hint: "مثال: دورة", quick: [["دورة", 2500], ["شهادة احترافية", 8000], ["دبلوم", 20000]] },
+  { id: "other", label: "شي ثاني", icon: "planner", hint: "وش تبي تخطط له؟", quick: [] }
+];
+
 async function renderPlanner() {
   const w = await wishState();
   pageTop("المخطط", w.count, w.ready);
   const P = S.planner;
+  P.kind = P.kind || "item";
+  const K = PLAN_KINDS.find(k => k.id === P.kind) || PLAN_KINDS[0];
   $("#view").innerHTML = `
-    <p class="page-sub">قبل لا تشتري، نقارن لك التقسيط والتمويل والتحويش على وضعك الحقيقي، ونختار الأنسب.</p>
+    <p class="page-sub">خطط لأي مصروف كبير: شراء، سفرة، مناسبة، أو دراسة. نقارن لك التقسيط والتمويل والتحويش على وضعك الحقيقي، ونختار الأنسب.</p>
     <section class="card">
-      <label class="field"><span>وش تبي تشتري؟</span><input id="pl-name" value="${esc(P.name)}" maxlength="60"></label>
+      <div class="kind-chips">${PLAN_KINDS.map(k => `<button data-kind="${k.id}" aria-pressed="${k.id === P.kind}">${ic(k.icon)}${k.label}</button>`).join("")}</div>
+      <label class="field"><span>وش تبي تخطط له؟</span><input id="pl-name" value="${esc(P.name)}" maxlength="60" placeholder="${esc(K.hint)}"></label>
       <div class="grid-2" style="margin:0">
-        <label class="field" style="margin:0"><span>السعر (ر.س)</span><input id="pl-price" value="${esc(P.price)}" inputmode="decimal"></label>
+        <label class="field" style="margin:0"><span>المبلغ (ر.س)</span><input id="pl-price" value="${esc(P.price)}" inputmode="decimal"></label>
         <label class="field" style="margin:0"><span>بكم شهر تبي تجمعه؟</span><input id="pl-months" value="${esc(P.months)}" inputmode="numeric" placeholder="اختياري"></label>
       </div>
-      <div class="btn-row" style="margin-top:10px">${[["شوز", 500], ["جوال", 3000], ["لابتوب", 7000], ["أثاث", 15000]].map(([n, p]) => `<button class="chip" data-quick="${p}" data-qname="${n}">${n} ${fmt(p)}</button>`).join("")}</div>
+      ${K.quick.length ? `<div class="btn-row" style="margin-top:10px">${K.quick.map(([n, p]) => `<button class="chip" data-quick="${p}" data-qname="${n}">${n} ${fmt(p)}</button>`).join("")}</div>` : ""}
     </section>
     <div id="pl-out"><div class="skeleton"></div></div>
     <div id="pl-forecast"></div>`;
@@ -1016,7 +1042,7 @@ async function plannerResults() {
       <dl class="kv">
         <dt>تحوّش هالشهر</dt><dd>${money(sv.monthly)} <span class="muted">(${fmt(sv.salary_pct)}% من راتبك)</span></dd>
         <dt>بعدها كل شهر</dt><dd>لين ${money(sv.max_monthly)} <span class="muted">(حد الادخار)</span></dd>
-        <dt>متى تقدر تشتريه</dt><dd>${esc(sv.buy_label)}</dd>
+        <dt>متى تقدر تدفعه</dt><dd>${esc(sv.buy_label)}</dd>
         <dt>التكلفة الكلية</dt><dd>${money(price)} بدون أي رسوم</dd>
       </dl>
       ${target ? (sv.reachable_in_target
@@ -1058,7 +1084,7 @@ async function addWishFromPlanner(method) {
   if (!price) return toast("اكتب السعر أول.", "bad");
   if (!method) return toast("اختر طريقة أول.", "bad");
   try {
-    const r = await api("/api/wishlist", { method: "POST", body: { name, price, method } });
+    const r = await api("/api/wishlist", { method: "POST", body: { name, price, method, kind: P.kind || "item" } });
     const item = r.items.find(i => i.name === name);
     toast(`انضاف ${esc(name)} للأمنيات (${esc(item ? item.method_label : method)}). بنذكّرك أول ما يصير مناسب.`, "good");
     location.hash = "#wishlist";
@@ -1077,14 +1103,14 @@ async function renderWishlist() {
         : i.method === "save" ? (st.ok ? "جمعت المبلغ، مناسب الحين" : `توصل للمبلغ ${esc(i.when_label)}`)
         : st.ok ? "مناسب لك الحين" : st.whenK === null ? "ما يناسب بهالطريقة، جرّب «تجمع أول»" : `يصير مناسب ${esc(i.when_label)}`;
       return `<article class="card ob">
-        <div class="top"><div class="l" style="display:flex;gap:12px;align-items:center"><span class="ico">${ic("heart")}</span>
+        <div class="top"><div class="l" style="display:flex;gap:12px;align-items:center"><span class="ico">${ic(({ trip: "plane", event: "gift", education: "book", item: "box" })[i.kind] || "heart")}</span>
           <div><div class="t" style="font-weight:700">${esc(i.name)}</div><div class="muted">${esc(i.method_label || METHOD[i.method] || i.method)}</div></div></div>
           <button class="x-btn" data-del-wish="${i.id}" aria-label="حذف">${ic("trash")}</button></div>
         <div class="top" style="align-items:center"><span class="badge ${st.ok ? "b-paid" : "b-upcoming"}">${ic(st.ok ? "check" : "clock")}${line}</span>
           <span class="amount">${money(i.price)}</span></div>
         ${i.method === "save" ? `<div class="bar"><span style="width:${st.pct || 0}%"></span></div>
           <div class="muted">جمعت ${money(i.saved)} من ${money(i.price)} (${st.pct || 0}%)</div>` : ""}
-        <div class="foot"><button class="chip" data-compare="${i.id}" data-name="${esc(i.name)}" data-price="${i.price}">${ic("planner")}قارن طرق الشراء</button></div>
+        <div class="foot"><button class="chip" data-compare="${i.id}" data-name="${esc(i.name)}" data-price="${i.price}" data-wkind="${esc(i.kind || "item")}">${ic("planner")}قارن طرق الدفع</button></div>
       </article>`;
     }).join("") : `<section class="card empty">قائمتك فاضية. خطط لأي شي تبيه من «المخطط» وضيفه هنا.<br><br><a class="btn soft" href="#planner">روح للمخطط</a></section>`}
     ${S.demo ? `<section class="card" style="text-align:center"><button class="btn teal block" data-act="next-month">انتقل للشهر الجاي</button>
@@ -1325,6 +1351,64 @@ async function addBankSheet() {
   });
 }
 
+/* ===================== SCORE & STANDINGS ===================== */
+function scoreSlide(sc, lb) {
+  const cls = sc.score >= 85 ? "" : sc.score >= 55 ? "v" : "g";
+  return `<section class="card ring-card slide" aria-label="تقييم إدارتك">
+      <div class="slide-top">
+        <span class="badge b-violet">${esc(sc.grade)}</span>
+        <a class="square-btn" href="#standings" aria-label="الترتيب">${ic("trophy")}</a>
+      </div>
+      <div class="ring" style="margin-top:-8px">${ringSvg(sc.score / 100, cls)}
+        <div class="ring-center"><span class="k">تقييم إدارتك</span>
+          <span class="v num ${cls === "v" ? "lav" : cls === "g" ? "gold" : ""}">${sc.score}</span>
+          <span class="of">من 100</span></div></div>
+      <p class="ring-foot">نقاطك <b class="num">${fmt(sc.points)}</b> · ترتيبك <b class="num">#${lb.rank}</b> من <span class="num">${lb.total}</span></p>
+      <button class="link-btn" data-act="score-why" style="margin:6px auto 0">كيف أرفع تقييمي؟</button>
+    </section>`;
+}
+
+function scoreSheet() {
+  const sc = S._score;
+  if (!sc) return;
+  openSheet({ title: "تقييم إدارتك", body: `
+    <div class="note">${esc(sc.fair_note)}</div>
+    ${sc.parts.map(p => `<div class="card tight" style="margin-bottom:10px">
+        <div class="card-head" style="margin-bottom:6px"><b>${esc(p.label)}</b><span class="num"><b>${p.points}</b> / ${p.max}</span></div>
+        <div class="bar ${p.points >= p.max ? "" : p.points >= p.max / 2 ? "v" : "warn"}"><span style="width:${p.points / p.max * 100}%"></span></div>
+        <p class="muted" style="margin:8px 0 0">${esc(p.note)}</p>
+        ${p.tip ? `<p style="margin:6px 0 0;font-size:14px" class="teal">${esc(p.tip)}</p>` : ""}
+      </div>`).join("")}
+    ${sc.events && sc.events.length ? `<h2 style="font-size:15px;margin:14px 0 6px">نقاط كسبتها</h2>
+      ${sc.events.map(e => `<div class="row"><span>${esc(e.label)}</span><span class="r teal">+${e.points}</span></div>`).join("")}` : ""}
+    <p class="muted" style="margin-top:12px">تكسب نقاط إضافية لما تدفع قبل الموعد، تلغي اشتراك ما تحتاجه، وتخلّص الشهر تحت حدك.</p>` });
+}
+
+async function renderStandings() {
+  backTop("الترتيب");
+  const lb = await api("/api/leaderboard");
+  $("#view").innerHTML = `
+    <section class="card" style="text-align:center">
+      <div class="muted">ترتيبك</div>
+      <div class="huge lavender">#${lb.rank} <span class="muted" style="font-size:15px">من ${lb.total}</span></div>
+      <p class="muted" style="margin:6px 0 0">تقييمك ${lb.score} من 100 · نقاطك ${fmt(lb.points)}</p>
+    </section>
+    <div class="note">${esc(lb.note)}</div>
+    <section class="card">
+      <h2>الظهور بالترتيب</h2>
+      <label class="switch" style="margin-bottom:12px"><input type="checkbox" id="lb-opt" ${lb.opt_in ? "checked" : ""}>اظهر للآخرين باسم مستعار</label>
+      <div class="btn-row"><input id="lb-name" maxlength="24" placeholder="اسمك المستعار" value="${esc(lb.nickname || "")}" style="flex:1">
+        <button class="btn sm" data-act="lb-save">حفظ</button></div>
+      <p class="muted" style="margin:8px 0 0">${lb.opt_in ? "اسمك ظاهر للمتنافسين، بدون أي مبالغ." : "أنت مخفي عن غيرك، وتشوف ترتيبك لحالك."}</p>
+    </section>
+    <section class="card">
+      ${lb.rows.map(r => `<div class="row" style="${r.me ? "background:var(--violet-bg);border-radius:14px;padding-inline:10px" : ""}">
+          <div class="l"><span class="num" style="width:28px;font-weight:700;${r.rank <= 3 ? "color:var(--gold)" : ""}">${r.rank <= 3 ? ["🥇", "🥈", "🥉"][r.rank - 1] : "#" + r.rank}</span>
+            <span class="t" ${r.me ? "" : "data-no-tr"}>${esc(r.name)}${r.me ? ` <span class="muted">(أنت)</span>` : ""}</span></div>
+          <span class="r num">${r.score}</span></div>`).join("")}
+    </section>`;
+}
+
 /* ===================== CHAT ===================== */
 const SUGGESTIONS = ["أقدر آخذ جوال بـ 3000 على 4 دفعات؟", "طيب متى أقدر؟", "حط الجوال بالأمنيات", "كم عليّ هالشهر؟", "ضيف مصروف قهوة 20"];
 function chatHtml() {
@@ -1404,6 +1488,14 @@ document.addEventListener("click", async e => {
   if (act === "wish-chosen") return addWishFromPlanner(S.planner._chosenMethod);
   if (act === "add-bank") return addBankSheet();
   if (act === "edit-profile") return profileSheet();
+  if (act === "score-why") return scoreSheet();
+  if (act === "lb-save") {
+    const opt = $("#lb-opt").checked, nickname = $("#lb-name").value.trim();
+    try { await api("/api/leaderboard/me", { method: "PUT", body: { opt_in: opt, nickname: nickname || null } });
+      toast(opt ? "تمام، صرت ظاهر بالترتيب." : "تمام، أنت مخفي عن غيرك.", "good"); refresh(); }
+    catch (err) { handleError(err); }
+    return;
+  }
   if (act === "reset") {
     if (!ask("بنبدأ الديمو من جديد ونمسح البيانات الحالية. تبي نكمل؟")) return;
     try { const r = await api("/api/demo/reset", { method: "POST" }); setToken(r.token); S.chat = []; showDetected(); } catch (err) { handleError(err); }
@@ -1429,6 +1521,8 @@ document.addEventListener("click", async e => {
     if (S.planner.chosen && S.planner.chosen.type === "loan" && S.planner.chosen.id === id) S.planner.chosen.months = months;
     return plannerResults().catch(handleError);
   }
+  const kindBtn = t.closest("[data-kind]");
+  if (kindBtn) { S.planner = { ...S.planner, kind: kindBtn.dataset.kind, name: "", chosen: null, tenors: {} }; return renderPlanner().catch(handleError); }
   const quick = t.closest("[data-quick]");
   if (quick) {
     S.planner = { ...S.planner, price: quick.dataset.quick, name: T(quick.dataset.qname), chosen: null, tenors: {} };
@@ -1467,7 +1561,7 @@ document.addEventListener("click", async e => {
   const setP = t.closest("[data-set-price]");
   if (setP) { S.planner.price = setP.dataset.setPrice; $("#pl-price").value = S.planner.price; return plannerResults().catch(handleError); }
   const cmp = t.closest("[data-compare]");
-  if (cmp) { S.planner = { ...S.planner, name: cmp.dataset.name, price: cmp.dataset.price, chosen: null }; location.hash = "#planner"; return; }
+  if (cmp) { S.planner = { ...S.planner, name: cmp.dataset.name, price: cmp.dataset.price, kind: cmp.dataset.wkind || "item", chosen: null }; location.hash = "#planner"; return; }
   const delW = t.closest("[data-del-wish]");
   if (delW) { try { await api(`/api/wishlist/${delW.dataset.delWish}`, { method: "DELETE" }); refresh(); } catch (err) { handleError(err); } return; }
   const delE = t.closest("[data-del-exp]");

@@ -29,6 +29,7 @@ import budget
 import subscriptions
 import auth
 import payments
+import score
 
 PRODUCTION_MODE = security.PRODUCTION_MODE
 DEMO_MODE = not PRODUCTION_MODE
@@ -349,6 +350,7 @@ def get_plans(user=Depends(current_user)):
 @app.post("/api/plans/{plan_id}/confirm")
 def confirm(plan_id: str, body: ConfirmIn, user=Depends(current_user)):
     with db.tx() as con:
+        score.award(con, user["id"], "plan_confirmed", 2, f"confirm:{plan_id}")
         if not service.confirm_plan(con, user["id"], plan_id, body.amount, body.remaining):
             raise HTTPException(404, "الخطة غير موجودة.")
         db.audit(con, user["hash"], "plan.confirmed", {"plan": plan_id, "edited": body.amount is not None or body.remaining is not None})
@@ -441,6 +443,36 @@ def post_payments(body: PayIn, user=Depends(current_user)):
         return {**out, "due": payments.due(con, user["id"])}
 
 
+class PublicIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    opt_in: bool
+    nickname: Optional[str] = Field(default=None, max_length=24, pattern=r"^[^<>]{0,24}$")
+
+
+@app.get("/api/score")
+def get_score(user=Depends(current_user)):
+    with db.tx() as con:
+        out = score.compute(con, user["id"])
+        out["events"] = score.events(con, user["id"])
+        return out
+
+
+@app.get("/api/leaderboard")
+def get_leaderboard(user=Depends(current_user)):
+    with db.tx() as con:
+        return score.leaderboard(con, user["id"], DEMO_MODE)
+
+
+@app.put("/api/leaderboard/me")
+def put_leaderboard(body: PublicIn, user=Depends(current_user)):
+    if body.opt_in and not (body.nickname or "").strip():
+        raise HTTPException(422, "اختر اسم مستعار عشان تظهر بالترتيب.")
+    with db.tx() as con:
+        score.set_public(con, user["id"], body.opt_in, body.nickname)
+        db.audit(con, user["hash"], "leaderboard.updated", {"opt_in": body.opt_in})
+        return score.leaderboard(con, user["id"], DEMO_MODE)
+
+
 @app.get("/api/categories")
 def get_categories():
     return {"groups": [{"id": "essential", "label": "الأساسيات", "items": detect.CATEGORIES["essential"]},
@@ -502,7 +534,7 @@ def get_wishlist(user=Depends(current_user)):
 @app.post("/api/wishlist")
 def post_wishlist(body: WishIn, user=Depends(current_user)):
     with db.tx() as con:
-        service.add_wish(con, user["id"], body.name, body.price, body.method)
+        service.add_wish(con, user["id"], body.name, body.price, body.method, getattr(body, "kind", "item"))
         db.audit(con, user["hash"], "wishlist.added", {"method": body.method})
         return {"items": service.wishlist(con, user["id"])}
 
