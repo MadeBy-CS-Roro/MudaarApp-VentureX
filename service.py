@@ -226,7 +226,8 @@ def visible_plans(con, user_id):
     return {"plans": result.pop("items") + [p for p in rows if p["remaining"] == 0], **result}
 
 
-def confirm_plan(con, user_id: int, plan_id: str, amount: float | None, remaining: int | None) -> bool:
+def confirm_plan(con, user_id: int, plan_id: str, amount: float | None, remaining: int | None,
+                 day: int | None = None) -> bool:
     if not con.in_transaction:
         con.execute("BEGIN IMMEDIATE")
     subscriptions.check_plan_access(con, user_id, plan_id)
@@ -239,8 +240,9 @@ def confirm_plan(con, user_id: int, plan_id: str, amount: float | None, remainin
     if remaining is not None and remaining > 0 and row["active_until"] is not None and row["active_until"] < cur:
         subscriptions.check_creation(con, user_id)
     active_until = row["active_until"] if remaining is None else cur + remaining - 1
-    con.execute("UPDATE plans SET confirmed=1, amount=?, active_until=? WHERE user_id=? AND id=?",
-                (row["amount"] if amount is None else amount, active_until, user_id, plan_id))
+    con.execute("UPDATE plans SET confirmed=1, amount=?, active_until=?, day=? WHERE user_id=? AND id=?",
+                (row["amount"] if amount is None else amount, active_until,
+                 row["day"] if day is None else day, user_id, plan_id))
     return True
 
 

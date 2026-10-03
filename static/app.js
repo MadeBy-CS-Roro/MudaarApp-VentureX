@@ -2,7 +2,7 @@
 /* مُدار — phone web app. Every number comes from the API; nothing is calculated here
    except formatting and the ring's percentage. */
 
-/* ===================== helpers ===================== */
+/* ---------- helpers ---------- */
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -65,7 +65,7 @@ function toast(html, kind = "", ms = 5000) {
   setTimeout(() => t.remove(), ms);
 }
 
-/* ===================== API ===================== */
+/* ---------- API ---------- */
 const S = {
   token: null, me: null, demo: true,
   chat: [], planner: { name: (() => { try { return localStorage.getItem("mudar_lang") === "en" ? "Phone" : "جوال"; } catch (_) { return "جوال"; } })(), price: "3000", months: "", chosen: null, others: false },
@@ -103,7 +103,7 @@ function handleError(e) {
   toast(esc(e.message), "bad");
 }
 
-/* ===================== theme ===================== */
+/* ---------- theme ---------- */
 function applyTheme(t) {
   const theme = t || (() => { try { return localStorage.getItem("mudar_theme") || "dark"; } catch (_) { return "dark"; } })();
   document.documentElement.dataset.theme = theme;
@@ -112,7 +112,7 @@ function applyTheme(t) {
   $('meta[name="theme-color"]').setAttribute("content", dark ? "#1f1d26" : "#f4f2fb");
 }
 
-/* ===================== sheets ===================== */
+/* ---------- sheets ---------- */
 function openSheet({ title = "", body = "", tall = false, onMount } = {}) {
   closeSheet();
   const bg = document.createElement("div");
@@ -129,7 +129,7 @@ function openSheet({ title = "", body = "", tall = false, onMount } = {}) {
 }
 function closeSheet() { $$(".sheet-bg").forEach(x => x.remove()); }
 
-/* ===================== auth screens ===================== */
+/* ---------- auth screens ---------- */
 function screen(html) {
   closeSheet();
   $("#layer").innerHTML = `<div class="screen" id="screen"><div class="inner">${html}</div></div>`;
@@ -356,7 +356,7 @@ function showOtp() {
   });
 }
 
-/* ===================== bank connection (onboarding) ===================== */
+/* ---------- bank connection (onboarding) ---------- */
 function showBankConnect() {
   const banks = [["demo1", "بنك تجريبي أ", "حساب الراتب"], ["demo2", "بنك تجريبي ب", "بطاقة ائتمانية"], ["demo3", "بنك تجريبي ج", "حساب توفير"]];
   const picked = new Set(["demo1"]);
@@ -438,7 +438,7 @@ async function logout() {
   showWelcome();
 }
 
-/* ===================== app shell ===================== */
+/* ---------- app shell ---------- */
 const TABS = [
   { id: "expenses", label: "المصروفات", icon: "expenses" },
   { id: "obligations", label: "الالتزامات", icon: "obligations" },
@@ -501,7 +501,7 @@ function alertBox(a) {
 }
 const alertsHtml = list => list.map(alertBox).filter(Boolean).map(a => `<div class="alert ${a.cls}">${ic(a.icon)}<div>${a.text}</div></div>`).join("");
 
-/* ===================== HOME ===================== */
+/* ---------- HOME ---------- */
 function ringSvg(fraction, cls = "") {
   const R = 96, C = 2 * Math.PI * R, f = Math.max(0, Math.min(1, fraction));
   return `<svg viewBox="0 0 224 224"><circle class="track" cx="112" cy="112" r="${R}" fill="none" stroke-width="18"/>
@@ -614,7 +614,7 @@ function bindSlider() {
   dots.forEach((d, i) => d.addEventListener("click", () => slides[i].scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" })));
 }
 
-/* ===================== EXPENSES ===================== */
+/* ---------- EXPENSES ---------- */
 let CATS = null;
 async function categories() {
   if (!CATS) CATS = (await api("/api/categories")).groups;
@@ -702,7 +702,7 @@ async function recategorizeSheet(merchant) {
   });
 }
 
-/* ===================== OBLIGATIONS ===================== */
+/* ---------- OBLIGATIONS ---------- */
 async function renderObligations() {
   const [o, due, s, w] = await Promise.all([api("/api/obligations"), api("/api/payments/due"), api("/api/summary"), wishState()]);
   pageTop("الالتزامات", w.count, w.ready);
@@ -757,6 +757,7 @@ async function renderObligations() {
         <label class="switch"><input type="checkbox" data-mode="${esc(p.id)}" ${p.pay_mode === "auto" ? "checked" : ""}>ينسحب تلقائي من البنك</label>
         <div class="btn-row">${action(p.action)}${siteChip(p)}
           ${p.confirmed ? "" : `<button class="btn soft sm" data-confirm="${esc(p.id)}">أكّد</button>`}
+          <button class="btn soft sm" data-plan-edit="${esc(p.id)}">تعديل</button>
           ${p.source === "manual" ? `<button class="x-btn" data-del-plan="${esc(p.id)}" aria-label="حذف">${ic("trash")}</button>` : ""}</div>
       </div>
     </article>`;
@@ -815,6 +816,45 @@ async function renderObligations() {
       <button role="tab" data-tab-ob="previous" aria-selected="${S.obTab === "previous"}">المدفوعات السابقة</button>
     </div>
     <div>${S.obTab === "current" ? current : previous}</div>`;
+}
+async function editPlanSheet(planId) {
+  try {
+    const data = await api("/api/plans");
+    const plan = data.plans.find(p => p.id === planId);
+    if (!plan) return toast("الخطة غير موجودة.", "bad");
+    const sheet = openSheet({ title: `تعديل ${plan.name}`, body: `
+      <form id="f-plan-edit">
+        <p class="muted">اترك الحقل فاضي إذا ما تبي تغيّره.</p>
+        <label class="field"><span>المبلغ الشهري (ر.س)</span><input name="amount" inputmode="decimal" value="${esc(plan.amount)}"></label>
+        ${plan.remaining != null ? `<label class="field"><span>الدفعات الباقية</span><input name="remaining" inputmode="numeric" value="${esc(plan.remaining)}"></label>` : ""}
+        <label class="field"><span>يوم السداد (1 إلى 28)</span><input name="day" inputmode="numeric" value="${esc(plan.day)}"></label>
+        <div class="btn-row"><button class="btn" type="submit">احفظ التعديل</button><button class="btn ghost" type="button" data-edit-cancel>إلغاء</button></div>
+      </form>` });
+    $("[data-edit-cancel]", sheet).addEventListener("click", closeSheet);
+    $("#f-plan-edit", sheet).addEventListener("submit", async e => {
+      e.preventDefault();
+      const form = e.target, button = $("[type=submit]", form), body = {};
+      if (button.disabled) return;
+      const limits = { amount: [0, 1000000], remaining: [0, 600], day: [1, 28] };
+      for (const [field, [min, max]] of Object.entries(limits)) {
+        const text = form.elements[field]?.value.trim();
+        if (!text) continue;
+        const value = Number(text.replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+        if (!Number.isFinite(value) || value < min || value > max ||
+            (field === "amount" ? value === 0 : !Number.isInteger(value))) {
+          return toast(field === "day" ? "اكتب يوم السداد من 1 إلى 28." :
+            field === "remaining" ? "اكتب عدد الدفعات صح." : "اكتب المبلغ صح.", "bad");
+        }
+        if (value !== plan[field]) body[field] = value;
+      }
+      if (!Object.keys(body).length) return toast("ما غيّرت شي في الخطة.");
+      button.disabled = true;
+      try {
+        await api(`/api/plans/${encodeURIComponent(planId)}/confirm`, { method: "POST", body });
+        closeSheet(); toast("عدّلنا الخطة وأكدناها.", "good"); refresh();
+      } catch (err) { handleError(err); button.disabled = false; }
+    });
+  } catch (err) { handleError(err); }
 }
 function addPlanSheet() {
   const sheet = openSheet({ title: "أضف التزام", body: `
@@ -904,7 +944,7 @@ async function paySheet() {
   });
 }
 
-/* ===================== PLANNER ===================== */
+/* ---------- PLANNER ---------- */
 const PLAN_KINDS = [
   { id: "item", label: "شراء", icon: "box", hint: "مثال: جوال", quick: [["شوز", 500], ["جوال", 3000], ["لابتوب", 7000], ["أثاث", 15000]] },
   { id: "trip", label: "سفرة", icon: "plane", hint: "مثال: سفرة دبي", quick: [["سفرة داخلية", 3000], ["سفرة دبي", 6000], ["سفرة أوروبا", 18000]] },
@@ -1091,7 +1131,7 @@ async function addWishFromPlanner(method) {
   } catch (err) { handleError(err); }
 }
 
-/* ===================== WISHLIST ===================== */
+/* ---------- WISHLIST ---------- */
 async function renderWishlist() {
   backTop("قائمة الأمنيات");
   const w = await api("/api/wishlist");
@@ -1129,7 +1169,7 @@ async function nextMonth() {
   } catch (err) { handleError(err); }
 }
 
-/* ===================== ACCOUNT ===================== */
+/* ---------- ACCOUNT ---------- */
 function donut(parts) {
   const total = parts.reduce((a, p) => a + Math.max(0, p.value), 0) || 1, r = 52, c = 2 * Math.PI * r;
   let off = 0;
@@ -1252,7 +1292,7 @@ function budgetSheet() {
   });
 }
 
-/* ===================== SUBSCRIPTIONS ===================== */
+/* ---------- SUBSCRIPTIONS ---------- */
 async function renderSubscriptions() {
   backTop("الباقات");
   const r = await api("/api/subscriptions");
@@ -1351,7 +1391,7 @@ async function addBankSheet() {
   });
 }
 
-/* ===================== SCORE & STANDINGS ===================== */
+/* ---------- SCORE & STANDINGS ---------- */
 function scoreSlide(sc, lb) {
   const cls = sc.score >= 85 ? "" : sc.score >= 55 ? "v" : "g";
   return `<section class="card ring-card slide" aria-label="تقييم إدارتك">
@@ -1409,7 +1449,7 @@ async function renderStandings() {
     </section>`;
 }
 
-/* ===================== CHAT ===================== */
+/* ---------- CHAT ---------- */
 const SUGGESTIONS = ["أقدر آخذ جوال بـ 3000 على 4 دفعات؟", "طيب متى أقدر؟", "حط الجوال بالأمنيات", "كم عليّ هالشهر؟", "ضيف مصروف قهوة 20"];
 function chatHtml() {
   return S.chat.map(m => {
@@ -1460,7 +1500,7 @@ function openChat() {
   });
 }
 
-/* ===================== global events ===================== */
+/* ---------- global events ---------- */
 document.addEventListener("click", async e => {
   const t = e.target;
   const copy = t.closest("[data-copy]");
@@ -1571,6 +1611,8 @@ document.addEventListener("click", async e => {
   const tab = t.closest("[data-tab-ob]");
   if (tab) { S.obTab = tab.dataset.tabOb; return refresh(); }
   const conf = t.closest("[data-confirm]");
+  const edit = t.closest("[data-plan-edit]");
+  if (edit) return editPlanSheet(edit.dataset.planEdit);
   if (conf) { try { await api(`/api/plans/${encodeURIComponent(conf.dataset.confirm)}/confirm`, { method: "POST", body: {} }); toast("أكدنا الالتزام.", "good"); refresh(); } catch (err) { handleError(err); } return; }
   const delP = t.closest("[data-del-plan]");
   if (delP) { if (!ask("نحذف هالالتزام من مُدار؟ هذا ما يلغيه عند الجهة.")) return;
@@ -1606,7 +1648,7 @@ document.addEventListener("change", async e => {
   } catch (err) { m.checked = !m.checked; handleError(err); }
 });
 
-/* ===================== boot ===================== */
+/* ---------- boot ---------- */
 applyTheme();
 if (window.I18N) I18N.start();
 if (S.token) startApp(); else showWelcome();

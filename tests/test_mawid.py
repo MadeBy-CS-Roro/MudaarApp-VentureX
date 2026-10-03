@@ -78,6 +78,62 @@ def test_confirm_plan_with_zero_remaining_is_not_counted(client):
     assert summary["formula"]["obligations"] == 3500
     assert summary["safe_to_spend"] == 1200
 
+@pytest.mark.parametrize(
+    ("day", "due_date", "days_until"),
+    [(1, "2026-10-01", -23), (24, "2026-10-24", 0),
+     (26, "2026-10-26", 2), (28, "2026-09-28", -26)],
+)
+def test_correct_payment_day_updates_due_dates_and_alerts(client, day, due_date, days_until):
+    before = {p["id"]: p for p in client.get("/api/plans").json()["plans"]}["tamara"]
+    response = client.post("/api/plans/tamara/confirm", json={"day": day})
+    assert response.status_code == 200
+    confirmed = {p["id"]: p for p in response.json()["plans"]}["tamara"]
+    assert confirmed["day"] == day
+    assert confirmed["confirmed"] is True
+    assert confirmed["amount"] == before["amount"]
+    assert confirmed["remaining"] == before["remaining"]
+    saved = {p["id"]: p for p in client.get("/api/plans").json()["plans"]}["tamara"]
+    assert saved["day"] == day
+    summary = client.get("/api/summary").json()
+    plan = next(p for p in summary["plans"] if p["id"] == "tamara")
+    assert plan["day"] == day
+    assert plan["due_date"] == due_date
+    assert plan["days_until"] == days_until
+    assert plan["status"] == ("paid" if days_until < 0 else "upcoming")
+    assert plan["before_salary"] is (0 <= days_until <= 5)
+    alerts = [a for a in summary["alerts"] if a["type"] == "before_salary"]
+    assert bool(alerts) is (0 <= days_until <= 5)
+    if alerts:
+        assert alerts[0]["amount"] == before["amount"]
+        assert alerts[0]["plans"] == [{"name": before["name"], "days_until": days_until}]
+    assert summary["formula"]["obligations"] == 4100
+    obligations = client.get("/api/obligations").json()
+    item = next(p for p in obligations["items"] if p["id"] == "tamara")
+    assert item["day"] == day
+    assert item["due_date"] == due_date
+
+
+@pytest.mark.parametrize("day", [0, -1, 29, 32, 1.5, True, "24"])
+def test_invalid_payment_day_does_not_change_plan(client, day):
+    before = client.get("/api/plans").json()
+    response = client.post("/api/plans/tamara/confirm", json={"day": day, "amount": 850})
+    assert response.status_code == 422
+    assert client.get("/api/plans").json() == before
+
+
+def test_payment_day_correction_can_be_combined_and_is_preserved(client):
+    response = client.post("/api/plans/tamara/confirm", json={"day": 26, "amount": 850, "remaining": 3})
+    assert response.status_code == 200
+    for correction in ({}, {"amount": 900}, {"remaining": 4}, {"day": None}):
+        response = client.post("/api/plans/tamara/confirm", json=correction)
+        assert response.status_code == 200
+        plan = next(p for p in response.json()["plans"] if p["id"] == "tamara")
+        assert plan["day"] == 26
+    plan = next(p for p in client.get("/api/summary").json()["plans"] if p["id"] == "tamara")
+    assert plan["amount"] == 900
+    assert plan["remaining"] == 4
+    assert plan["due_date"] == "2026-10-26"
+
 
 @pytest.mark.parametrize(
     ("correction", "expected_amount", "expected_remaining"),
@@ -108,6 +164,8 @@ def test_confirm_plan_preserves_unedited_values_in_plans_and_summary(
     assert tamara["amount"] == expected_amount
     assert tamara["remaining"] == expected_remaining
     assert tamara["confirmed"] is True
+    original_day = next(p for p in client.get("/api/plans").json()["plans"] if p["id"] == "tamara")["day"]
+    assert tamara["day"] == original_day == 25
 
 
 def test_confirm_missing_plan_returns_not_found(client):
@@ -583,3 +641,23 @@ def test_manual_expense_updates_balance_categories_and_can_be_deleted(client):
     assert client.get("/api/expenses").json()["items"] == bank_rows
     assert client.delete(f"/api/expenses/{item['id']}").status_code == 404
     assert client.delete("/api/expenses/missing").status_code == 404
+
+def test_payment_day_correction_can_be_combined_and_is_preserved(client):
+    response = client.post("/api/plans/tamara/confirm", json={"day": 26, "amount": 850, "remaining": 3})
+    assert response.status_code == 200
+    for correction in ({}, {"amount": 900}, {"remaining": 4}, {"day": None}):
+        response = client.post("/api/plans/tamara/confirm", json=correction)
+        assert response.status_code == 200
+        plan = next(p for p in response.json()["plans"] if p["id"] == "tamara")
+        assert plan["day"] == 26
+    plan = next(p for p in client.get("/api/summary").json()["plans"] if p["id"] == "tamara")
+    assert plan["amount"] == 900
+    assert plan["remaining"] == 4
+    assert plan["due_date"] == "2026-10-26"
+
+@pytest.mark.parametrize("day", [0, -1, 29, 32, 1.5, True, "24"])
+def test_invalid_payment_day_does_not_change_plan(client, day):
+    before = client.get("/api/plans").json()
+    response = client.post("/api/plans/tamara/confirm", json={"day": day, "amount": 850})
+    assert response.status_code == 422
+    assert client.get("/api/plans").json() == before

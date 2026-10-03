@@ -49,6 +49,61 @@ async def verify(debug_url, app_url, plans_only=False):
             await b.wait(f"!!document.querySelector({selector!r}) && !document.querySelector('#view .skeleton')")
             await asyncio.sleep(.1)
 
+        await route("obligations", '[data-plan-edit="tamara"]')
+        await b.js("""window.planCorrections = [];
+          const originalFetch = window.fetch;
+          window.fetch = function(path, options) {
+            if (String(path).endsWith('/confirm') && options?.method === 'POST')
+              window.planCorrections.push(JSON.parse(options.body));
+            return originalFetch.apply(this, arguments);
+          };""")
+
+        async def correct_plan(values, expected, amount, remaining, day):
+            await b.click('[data-plan-edit="tamara"]')
+            await b.wait("!!document.querySelector('#f-plan-edit')")
+            for field, value in values.items():
+                await b.fill(f"#f-plan-edit [name={field}]", value)
+            await b.js("document.querySelector('#f-plan-edit').requestSubmit()")
+            await b.wait("!document.querySelector('#f-plan-edit')")
+            await b.wait("!!document.querySelector('[data-plan-edit=\"tamara\"]') && !document.querySelector('#view .skeleton')")
+            assert await b.js("window.planCorrections.at(-1)") == expected
+            saved = next(p for p in (await b.api("/api/plans"))["plans"] if p["id"] == "tamara")
+            assert (saved["amount"], saved["remaining"], saved["day"]) == (amount, remaining, day)
+            summary = await b.api("/api/summary")
+            item = next(p for p in summary["plans"] if p["id"] == "tamara")
+            assert item["day"] == day
+            if day == 26:
+                assert item["due_date"] == "2026-10-26"
+                alert = next(a for a in summary["alerts"] if a["type"] == "before_salary")
+                assert alert["plans"] == [{"name": "تمارا", "days_until": 2}]
+            if day == 10:
+                assert item["due_date"] == "2026-10-10"
+                assert not any(a["type"] == "before_salary" for a in summary["alerts"])
+
+        await correct_plan({"day": "٢٦"}, {"day": 26}, 600, 2, 26)
+        await correct_plan({"amount": "850", "remaining": "3", "day": "10"},
+                           {"amount": 850, "remaining": 3, "day": 10}, 850, 3, 10)
+        await correct_plan({"amount": "600", "remaining": "2", "day": ""},
+                           {"amount": 600, "remaining": 2}, 600, 2, 10)
+        await b.click('[data-plan-edit="tamara"]')
+        await b.wait("!!document.querySelector('#f-plan-edit')")
+        count = await b.js("window.planCorrections.length")
+        for value in ("0", "29", "1.5", "-1"):
+            await b.fill("#f-plan-edit [name=day]", value)
+            await b.js("document.querySelector('#f-plan-edit').requestSubmit()")
+            assert await b.js("window.planCorrections.length") == count
+        await b.fill("#f-plan-edit [name=day]", "26")
+        await b.click("#f-plan-edit [data-edit-cancel]")
+        assert not await b.js("!!document.querySelector('#f-plan-edit')")
+        assert await b.js("window.planCorrections.length") == count
+        await correct_plan({"day": "25"}, {"day": 25}, 600, 2, 25)
+        await route("home", ".ring-center")
+        assert (await b.api("/api/summary"))["available"] == 180
+        print("PASS: payment-day editor saves Arabic digits and combined edits, updates due dates/alerts, preserves blanks and validates/cancels safely")
+        if plans_only:
+            assert not b.errors, b.errors
+            return
+
         await route("expenses", "[data-act=add-expense]")
         await b.click("[data-act=add-expense]")
         await b.wait("!!document.querySelector('#f-exp')")

@@ -95,6 +95,7 @@ class ConsentIn(BaseModel):
 class ConfirmIn(BaseModel):
     amount: Optional[float] = Field(default=None, gt=0, le=1_000_000)
     remaining: Optional[int] = Field(default=None, ge=0, le=600)
+    day: Optional[int] = Field(default=None, ge=1, le=28, strict=True)
 
 class PriceIn(BaseModel):
     price: float = Field(gt=0, le=1_000_000)
@@ -350,10 +351,11 @@ def get_plans(user=Depends(current_user)):
 @app.post("/api/plans/{plan_id}/confirm")
 def confirm(plan_id: str, body: ConfirmIn, user=Depends(current_user)):
     with db.tx() as con:
-        score.award(con, user["id"], "plan_confirmed", 2, f"confirm:{plan_id}")
-        if not service.confirm_plan(con, user["id"], plan_id, body.amount, body.remaining):
+        if not service.confirm_plan(con, user["id"], plan_id, body.amount, body.remaining, body.day):
             raise HTTPException(404, "الخطة غير موجودة.")
-        db.audit(con, user["hash"], "plan.confirmed", {"plan": plan_id, "edited": body.amount is not None or body.remaining is not None})
+        score.award(con, user["id"], "plan_confirmed", 2, f"confirm:{plan_id}")
+        db.audit(con, user["hash"], "plan.confirmed", {"plan": plan_id, "edited": any(
+            value is not None for value in (body.amount, body.remaining, body.day))})
         return {"ok": True, **service.visible_plans(con, user["id"])}
 
 
