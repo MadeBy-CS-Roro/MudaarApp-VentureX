@@ -121,6 +121,11 @@ def run_tool(con, user_id: int, name: str, args: dict) -> dict:
 _history: dict[int, deque] = defaultdict(lambda: deque(maxlen=10))
 _last: dict[int, dict] = defaultdict(lambda: {"price": 3000.0, "method": "bnpl4", "name": "جوال"})
 
+def clear_user_context(user_id: int) -> None:
+    """Discard both kinds of assistant memory before a user ID can be reused."""
+    _history.pop(user_id, None)
+    _last.pop(user_id, None)
+
 
 def chat(con, user_id: int, message: str, lang: str = "ar") -> dict:
     if API_KEY:

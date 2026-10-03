@@ -191,11 +191,16 @@ def new_demo_guest(con, connect_bank) -> object:
 
 
 def cleanup_demo_guests(con) -> int:
+    import assistant
+
     cutoff = (_now() - timedelta(hours=GUEST_TTL_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
     ids = [r["id"] for r in con.execute(
         "SELECT id FROM users WHERE is_demo_guest=1 AND phone_hash IS NULL AND created_at < ?", (cutoff,))]
     for uid in ids:
         for table in GUEST_TABLES:
             con.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
+        # SQLite may reuse this numeric ID for the next visitor. Remove all
+        # process-local context before deleting the account that owns it.
+        assistant.clear_user_context(uid)
         con.execute("DELETE FROM users WHERE id=?", (uid,))
     return len(ids)

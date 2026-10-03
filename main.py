@@ -230,8 +230,7 @@ def consent(body: ConsentIn, request: Request, authorization: Optional[str] = He
         "cid": r["consent_id"],
         "mode": "demo" if DEMO_MODE else "production",
     })
-    assistant._history.pop(r["user_id"], None)
-    assistant._last.pop(r["user_id"], None)
+    assistant.clear_user_context(r["user_id"])
     return {"consent_id": r["consent_id"], "token": token, "expires_at": r["expires_at"],
             "plans_found": len(r["plans"]), "unknown_merchants": r["unknown_merchants"]}
 
@@ -337,8 +336,7 @@ def revoke(user=Depends(signed_in_user)):
     with db.tx() as con:
         service.revoke(con, user["id"])
         db.audit(con, user["hash"], "consent.revoked")
-    assistant._history.pop(user["id"], None)
-    assistant._last.pop(user["id"], None)
+    assistant.clear_user_context(user["id"])
     return {"ok": True}
 
 
