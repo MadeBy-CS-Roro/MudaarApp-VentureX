@@ -7,5 +7,7 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
+# Replit leftovers and local backups
 attached_assets/
 backups/
+zipFile.zip
