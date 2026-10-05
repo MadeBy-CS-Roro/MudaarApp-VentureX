@@ -120,7 +120,7 @@ export SIGNING_SECRET="another-long-random-string"
 uvicorn main:app --reload
 ```
 
-Open [Mudaar App Demo]((https://b2cb6d06-fdcc-4983-9b3c-1dc72397a57a-00-2ns94whb4x9aa.sisko.replit.dev/)) on a phone-sized window and tap «دخول سريع بحساب نورة» (quick demo login). Every visitor gets a private copy of the demo data.on a phone-sized window...on a phone-sized window and tap **«دخول سريع بحساب نورة»** (quick demo login). Every visitor gets a private copy of the demo data. Switch to English from **حسابي → اللغة**.
+Open [Mudaar App Demo](https://b2cb6d06-fdcc-4983-9b3c-1dc72397a57a-00-2ns94whb4x9aa.sisko.replit.dev/) on a phone-sized window and tap «دخول سريع بحساب نورة» (quick demo login). Every visitor gets a private copy of the demo data.on a phone-sized window...on a phone-sized window and tap **«دخول سريع بحساب نورة»** (quick demo login). Every visitor gets a private copy of the demo data. Switch to English from **حسابي → اللغة**.
 
 Run the tests:
 
