@@ -171,12 +171,17 @@ Read-only consent · phone numbers stored only as a hash + last 3 digits · the 
 
 | | Role |
 | --- | --- |
-| **Reema Alshowiman** | Financial engine, detection, security |
+| **Reema Al-Showiman** | Financial engine, detection, security |
 | **Ghala Al-Otaibi** | API, consent, AI assistant |
-| **Lilyan** | Database, demo data, app screens |
+| **Lilyan Hassan** | Database, demo data, app screens |
 
 ---
 
 <p align="center">
   <sub>Information, not financial advice. Lender names and rates in the demo are illustrative; real offers require partnerships.</sub>
 </p>
+---
+<div align="center">
+  <a href="https://www.linkedin.com/in/reema-alshowiman">Connect with me on LinkedIn</a>
+</div>
+
